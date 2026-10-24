@@ -75,10 +75,16 @@ export const LIMITS = {
   /** Pushes accepted per minute by the receiver, in all and per source address. */
   pushesPerMinute: 240,
   pushesPerSource: 60,
-  /** Connections of the receiver: in all, per source address, idle time before closing. */
+  /**
+   * Connections of the receiver: in all, per source address (also the places
+   * kept for the module), idle time before closing. Over a limit the oldest
+   * silent connection is closed, never the newcomer from the module.
+   */
   receiverConnections: 32,
   receiverConnectionsPerSource: 4,
   receiverIdleMs: 10_000,
+  /** Sources whose latest post over budget may wait for their window (32 KB each). */
+  deferredSources: 8,
   /** Pushes kept by the receiver while the main container is away (only the latest matter). */
   pushQueue: 5,
   /** An answer of the module (device info, OK): a few hundred bytes. */

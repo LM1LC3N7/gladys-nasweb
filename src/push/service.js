@@ -15,11 +15,15 @@
 // (src/app.js).
 //
 // Bounded for a 64 MB container: 32 connections at most, 4 per source
-// address; a connection that sends nothing is closed within 10 s (the headers timeout
-// closes it at about 5 s, our own timer at 10 s), the
-// headers must arrive within 5 s and the whole request within 10 s (checked
-// every second: about 11 s at worst); 60 posts a minute per source address
-// and 240 in all. When DEVICE_ADDRESS is set ("Check the sender" on), a post
+// address, 4 kept for DEVICE_ADDRESS when set; over a limit the OLDEST
+// connection that has not sent its headers yet is closed, never the newcomer
+// of the module (it sends its request as soon as it connects). A connection
+// that sends nothing is closed within 10 s (the headers timeout closes it at
+// about 5 s, our own timer at 10 s), the headers must arrive within 5 s and
+// the whole request within 10 s (checked every second: about 11 s at worst).
+// 240 posts a minute in all; the module (DEVICE_ADDRESS) has that whole
+// budget, any other source 60 of it, over which its latest post is kept (8
+// sources at most) and sent once its window frees. When DEVICE_ADDRESS is set ("Check the sender" on), a post
 // from another address is answered 403 before any budget is spent, and the
 // main container is told (at most every 10 s), never with its body.
 //
@@ -78,8 +82,10 @@ export async function startPushService({ env = process.env, logger, now = Date.n
   let window = [];
   /** source address -> times of its posts in the last minute (bounded map) */
   const bySource = new Map();
-  /** source address -> open connections */
-  const open = new Map();
+  /** The open connections, oldest first; `requested` once their headers arrived. */
+  const conns = new Set();
+  /** source address -> the latest post over its minute budget, sent once the window frees */
+  const deferred = new Map();
   let lastRefusedNotice = -Infinity;
   const http = createServer(
     {
@@ -116,13 +122,23 @@ export async function startPushService({ env = process.env, logger, now = Date.n
       }
       window = window.filter((t) => time - t < 60_000);
       const mine = (bySource.get(from) ?? []).filter((t) => time - t < 60_000);
-      if (window.length >= LIMITS.pushesPerMinute || mine.length >= LIMITS.pushesPerSource) {
+      if (window.length >= LIMITS.pushesPerMinute) {
         request.resume();
         reply(response, 429, 'Too many requests');
         return;
       }
-      window.push(time);
-      mine.push(time);
+      // The module (DEVICE_ADDRESS) has the whole budget; another source over its
+      // own share has its LATEST post kept and sent once its window frees.
+      const over = !(device && from === device) && mine.length >= LIMITS.pushesPerSource;
+      if (over && !deferred.has(from) && deferred.size >= LIMITS.deferredSources) {
+        request.resume();
+        reply(response, 429, 'Too many requests');
+        return;
+      }
+      if (!over) {
+        window.push(time);
+        mine.push(time);
+      }
       if (!bySource.has(from) && bySource.size >= 256) {
         bySource.clear();
       }
@@ -152,40 +168,104 @@ export async function startPushService({ env = process.env, logger, now = Date.n
       });
       request.on('end', () => {
         if (refused) return;
-        channel.send({
+        const message = {
           type: 'push',
           from,
           at: new Date(time).toISOString(),
           body: Buffer.concat(parts, size).toString('utf8'),
-        });
+        };
+        if (over) {
+          defer(from, message, mine[0] + 60_000 - time);
+        } else {
+          channel.send(message);
+        }
         reply(response, 200, ANSWER, 'application/json');
       });
       request.on('error', () => {});
     },
   );
-  http.maxConnections = LIMITS.receiverConnections;
+  /** Keeps the latest post of a source over its budget; sent when its window frees. */
+  function defer(from, message, wait) {
+    const pending = deferred.get(from);
+    if (pending) {
+      pending.message = message;
+      return;
+    }
+    const entry = { message };
+    entry.timer = setTimeout(
+      () => {
+        deferred.delete(from);
+        const t = now();
+        window = window.filter((x) => t - x < 60_000);
+        const times = (bySource.get(from) ?? []).filter((x) => t - x < 60_000);
+        window.push(t);
+        times.push(t);
+        bySource.set(from, times);
+        channel.send(entry.message);
+      },
+      Math.max(0, wait),
+    );
+    entry.timer.unref?.();
+    deferred.set(from, entry);
+  }
+
+  const isDevice = (socket) => device !== '' && socket.nwFrom === device;
+  /** Closes the oldest connection that has not sent its headers yet, among `which`. */
+  const evictOldestSilent = (which) => {
+    for (const socket of conns) {
+      if (!socket.nwRequested && which(socket)) {
+        conns.delete(socket);
+        socket.destroy();
+        return true;
+      }
+    }
+    return false;
+  };
+  const count = (which) => {
+    let n = 0;
+    for (const socket of conns) if (which(socket)) n += 1;
+    return n;
+  };
+
   http.maxHeadersCount = 50;
+  http.on('request', (request) => {
+    request.socket.nwRequested = true;
+  });
   http.on('connection', (socket) => {
     // Idle from its acceptance: a connection that sends nothing is closed. A
     // timer of our own (socket.setTimeout is reset by the HTTP server once its
-    // headers timeout passes); once bytes arrive, the headers (5 s) and request
-    // (10 s) timeouts of the server take over, then keepAliveTimeout (1 s).
+    // headers timeout passes); the headers (5 s) and request (10 s) timeouts
+    // of the server apply too, then keepAliveTimeout (1 s).
     const idle = setTimeout(() => socket.destroy(), idleMs);
     idle.unref?.();
-    socket.once('data', () => clearTimeout(idle));
-    socket.once('close', () => clearTimeout(idle));
-    const from = normalizeIp(socket.remoteAddress ?? '') ?? '';
-    const count = (open.get(from) ?? 0) + 1;
-    if (count > LIMITS.receiverConnectionsPerSource) {
-      socket.destroy();
-      return;
-    }
-    open.set(from, count);
     socket.once('close', () => {
-      const left = (open.get(from) ?? 1) - 1;
-      if (left <= 0) open.delete(from);
-      else open.set(from, left);
+      clearTimeout(idle);
+      conns.delete(socket);
     });
+    socket.nwFrom = normalizeIp(socket.remoteAddress ?? '') ?? '';
+    // Over a limit, the newcomer is never the one refused: the oldest connection
+    // still silent goes (the module sends its request as soon as it connects).
+    // The address of the module, when known, keeps its own places and is never
+    // refused.
+    if (isDevice(socket)) {
+      if (count(isDevice) >= LIMITS.receiverConnectionsPerSource) {
+        evictOldestSilent(isDevice);
+      }
+    } else {
+      const same = (s) => s.nwFrom === socket.nwFrom;
+      const others = (s) => !isDevice(s);
+      const limit = device
+        ? LIMITS.receiverConnections - LIMITS.receiverConnectionsPerSource
+        : LIMITS.receiverConnections;
+      if (
+        (count(same) >= LIMITS.receiverConnectionsPerSource && !evictOldestSilent(same)) ||
+        (count(others) >= limit && !evictOldestSilent(others))
+      ) {
+        socket.destroy();
+        return;
+      }
+    }
+    conns.add(socket);
   });
   await channel.start();
   await new Promise((resolve, reject) => {
@@ -202,6 +282,7 @@ export async function startPushService({ env = process.env, logger, now = Date.n
     channel,
     port,
     async stop() {
+      for (const entry of deferred.values()) clearTimeout(entry.timer);
       await new Promise((resolve) => {
         http.close(() => resolve());
         http.closeAllConnections();

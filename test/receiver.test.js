@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
+import * as netModule from 'node:net';
 import { ChannelClient, createChannelServer } from '../src/channel.js';
 import { isPushPath, startPushService } from '../src/push/service.js';
 
@@ -25,7 +26,8 @@ function send(port, { method = 'POST', path = `/nasweb/${PUSH}`, body = '{}', he
   });
 }
 
-async function service(extra = {}) {
+/** The receiver on the loopback; `now` is the clock, every other key goes to its env. */
+async function service({ now, ...env } = {}) {
   return startPushService({
     env: {
       PUSH_TOKEN: PUSH,
@@ -33,8 +35,9 @@ async function service(extra = {}) {
       HTTP_PORT: '0',
       CHANNEL_PORT: '0',
       HTTP_HOST: '127.0.0.1',
+      ...env,
     },
-    ...extra,
+    ...(now ? { now } : {}),
   });
 }
 
@@ -119,17 +122,139 @@ test('refused: another path or token (404), another method (405), too large (413
   }
 });
 
-test('60 pushes a minute per source address', async () => {
+test('over 60 a minute from one source: the latest post is kept and sent once the window frees', async () => {
   let time = 0;
   const svc = await service({ now: () => time });
+  const main = client(svc.channel.port);
   try {
+    await main.up;
     for (let i = 0; i < 60; i += 1) {
+      assert.equal((await send(svc.port, { body: `{"n":${i}}` })).status, 200);
+    }
+    await until(() => main.messages.length === 60);
+    time = 59_950; // the window frees in 50 ms
+    assert.equal((await send(svc.port, { body: '{"n":61}' })).status, 200);
+    assert.equal((await send(svc.port, { body: '{"n":62}' })).status, 200);
+    assert.equal(main.messages.length, 60, 'held, not sent over the budget');
+    await until(() => main.messages.length === 61);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(
+      main.messages.slice(60).map((m) => JSON.parse(m.body).n),
+      [62],
+      'only the latest, with its own time',
+    );
+    assert.equal(main.messages[60].at, new Date(59_950).toISOString());
+  } finally {
+    main.channel.stop();
+    await svc.stop();
+  }
+});
+
+test('the address of the module has the whole budget (240 a minute)', async () => {
+  const svc = await startPushService({
+    env: {
+      PUSH_TOKEN: PUSH,
+      CHANNEL_TOKEN: CHANNEL,
+      HTTP_PORT: '0',
+      CHANNEL_PORT: '0',
+      HTTP_HOST: '127.0.0.1',
+      DEVICE_ADDRESS: '127.0.0.1',
+    },
+    now: () => 0,
+  });
+  try {
+    for (let i = 0; i < 240; i += 1) {
       assert.equal((await send(svc.port)).status, 200);
     }
     assert.equal((await send(svc.port)).status, 429);
-    time = 60_001;
-    assert.equal((await send(svc.port)).status, 200);
   } finally {
+    await svc.stop();
+  }
+});
+
+/** Silent connections from `sources`, opened again as soon as they are closed, until stopped. */
+function silentAttack(port, sources, perSource) {
+  const { connect } = netModule;
+  let running = true;
+  const open = (localAddress) => {
+    if (!running) return;
+    const socket = connect({ host: '127.0.0.1', port, localAddress });
+    socket.on('error', () => {});
+    socket.resume();
+    socket.on('close', () => setTimeout(() => open(localAddress), 1));
+  };
+  for (const source of sources) {
+    for (let i = 0; i < perSource; i += 1) open(source);
+  }
+  return () => {
+    running = false;
+  };
+}
+
+/** Posts from the module (127.0.0.1) every 200 ms for 3 s: the statuses answered. */
+async function modulePosts(port) {
+  const answers = [];
+  for (let i = 0; i < 15; i += 1) {
+    await new Promise((r) => setTimeout(r, 200));
+    answers.push(
+      await new Promise((resolve) => {
+        const req = request(
+          {
+            host: '127.0.0.1',
+            localAddress: '127.0.0.1',
+            port,
+            method: 'POST',
+            path: `/nasweb/${PUSH}`,
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode);
+          },
+        );
+        req.setTimeout(1500, () => req.destroy());
+        req.on('error', (err) => resolve(err.code ?? 'error'));
+        req.end('{}');
+      }),
+    );
+  }
+  return answers;
+}
+
+test('(a) silent connections from the same apparent address: the module stays served', async () => {
+  const svc = await service({ IDLE_MS: '400' });
+  const stop = silentAttack(svc.port, ['127.0.0.1'], 8);
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    const answers = await modulePosts(svc.port);
+    assert.deepEqual(answers, Array(15).fill(200));
+  } finally {
+    stop();
+    await svc.stop();
+  }
+});
+
+test('(b) 8 addresses × 4 silent connections, sender checked: the module stays served', async () => {
+  const svc = await startPushService({
+    env: {
+      PUSH_TOKEN: PUSH,
+      CHANNEL_TOKEN: CHANNEL,
+      HTTP_PORT: '0',
+      CHANNEL_PORT: '0',
+      HTTP_HOST: '127.0.0.1',
+      DEVICE_ADDRESS: '127.0.0.1',
+      IDLE_MS: '400',
+    },
+  });
+  const sources = Array.from({ length: 8 }, (_, i) => `127.0.0.${i + 2}`);
+  const stop = silentAttack(svc.port, sources, 5);
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    const answers = await modulePosts(svc.port);
+    assert.deepEqual(answers, Array(15).fill(200));
+    const held = await new Promise((resolve) => svc.http.getConnections((_, n) => resolve(n)));
+    assert.ok(held <= 33, `${held} connections held`);
+  } finally {
+    stop();
     await svc.stop();
   }
 });

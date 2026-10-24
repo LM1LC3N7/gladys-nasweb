@@ -115,3 +115,10 @@ local TLS server and the real receiver on the loopback.
     written over, until "Test the connection" starts again from scratch;
   - "Test the connection" subscribes again at once;
   - refused pushes update the status at most every 10 s.
+- **Review r2** (fixes): connection limits close the oldest silent
+  connection instead of refusing the newcomer, with 4 places kept for the
+  module's address (attack tests with the same apparent address, and 8
+  addresses × 4); the module's address has the whole post budget, another
+  source over 60 a minute has its latest post kept and sent later; the
+  receiver is started again whenever its env differs from the one last sent
+  (also on `connected` and "Test the connection").

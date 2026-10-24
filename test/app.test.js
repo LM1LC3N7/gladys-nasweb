@@ -818,3 +818,23 @@ test('r1-10: "Test the connection" subscribes the module again, even within 10 m
   assert.equal(module.subscriptions[1][1], true);
   app.stop();
 });
+
+test('r2-2: the receiver follows its env, even when the change arrives by "connected"', async () => {
+  const env = await setup();
+  const { gladys, app } = env;
+  const starts = () => gladys.fake.bodies('POST', '/container/nasweb-push/start').map((b) => b.env);
+  assert.equal(starts().at(-1).DEVICE_ADDRESS, '192.168.1.50');
+  await gladys.fake.configUpdated({ ...gladys.fake.config, check_push_source: false });
+  assert.equal(starts().at(-1).DEVICE_ADDRESS, undefined, 'started again without the filter');
+  const count = starts().length;
+  // Turned on again while the WebSocket was down: only "connected" brings it.
+  gladys.fake.config.check_push_source = true;
+  await app.gladysConnected(gladys.fake.config);
+  assert.equal(starts().length, count + 1);
+  assert.equal(starts().at(-1).DEVICE_ADDRESS, '192.168.1.50');
+  // Unchanged: not started again.
+  await app.gladysConnected(gladys.fake.config);
+  await gladys.fake.action('test_connection');
+  assert.equal(starts().length, count + 1);
+  app.stop();
+});

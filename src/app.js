@@ -92,6 +92,8 @@ export class NaswebApp {
     this.tokens = { push: undefined, channel: undefined };
     this.receiver = { status: 'not started', port: null };
     this.lastReceiverTry = -Infinity;
+    /** The env given to the last startContainer of the receiver (in memory only: it holds secrets). */
+    this.lastReceiverEnv = undefined;
     this.channel = undefined;
     this.timersById = {};
     this.tickTimer = undefined;
@@ -232,10 +234,6 @@ export class NaswebApp {
       } else {
         await this.updateStatus();
       }
-      if (before.checkPushSource !== next.checkPushSource && !next.problem) {
-        // The receiver filters the sender itself: started again with the new setting.
-        await this.ensureReceiver();
-      }
       if (before.gladysHost !== next.gladysHost && next.gladysHost) {
         // A new push address: the module is told now (a real change, not a re-read).
         await this.read({ force: true });
@@ -255,6 +253,14 @@ export class NaswebApp {
       if (!next.problem) {
         await this.ensureReceiver();
       }
+    } else if (
+      !next.problem &&
+      this.lastReceiverEnv !== undefined &&
+      JSON.stringify(this.receiverEnv()) !== this.lastReceiverEnv
+    ) {
+      // The receiver runs with another env (the sender check changed, maybe while
+      // Gladys was away): started again with the current one.
+      await this.ensureReceiver();
     }
   }
 
@@ -421,7 +427,9 @@ export class NaswebApp {
     this.lastReceiverTry = this.clock();
     const generation = this.generation;
     try {
-      await this.gladys.startContainer(RECEIVER.name, { env: this.receiverEnv() });
+      const env = this.receiverEnv();
+      await this.gladys.startContainer(RECEIVER.name, { env });
+      this.lastReceiverEnv = JSON.stringify(env);
       const containers = await this.gladys.getContainers();
       if (generation !== this.generation) return;
       const container = (containers ?? []).find((c) => c?.name === RECEIVER.name);
