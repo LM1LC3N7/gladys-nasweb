@@ -1,177 +1,196 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "NASweb",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "NASweb modules (nasWebio): relay outputs, inputs and temperature, locally.",
+    "fr": "Modules NASweb (nasWebio) : sorties relais, entrées et température, en local."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-nasweb:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-nasweb/main/cover.png",
+  "categories": ["protocols", "security"],
+  "transports": ["local"],
+  "containers": [
+    {
+      "name": "nasweb-push",
+      "docker_image": "ghcr.io/lm1lc3n7/gladys-nasweb:0.1.0",
+      "command": ["node", "src/receiver.js"],
+      "start": "manual",
+      "read_only": true,
+      "memory_mb": 64,
+      "cpu": 0.1,
+      "ports": [
+        {
+          "container_port": 8080,
+          "protocol": "tcp",
+          "name": "nasweb_push",
+          "label": {
+            "en": "NASweb status receiver (HTTP)",
+            "fr": "Récepteur des états NASweb (HTTP)"
+          },
+          "browsable": false
+        }
+      ]
+    }
+  ],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your NASweb module, on your local network",
+        "fr": "Votre module NASweb, sur votre réseau local"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Relay outputs, inputs and the temperature probe of a NASweb module, through its local API, without any cloud. The module sends its states to Gladys by itself (a small receiver started by Gladys next to this integration). Give the module a fixed IP address in your router. Never tested with a real module. Unofficial integration, not affiliated with nasWebio.",
+        "fr": "Sorties relais, entrées et sonde de température d’un module NASweb, par son API locale, sans cloud. Le module envoie lui-même ses états à Gladys (un petit récepteur lancé par Gladys à côté de cette intégration). Donnez au module une adresse IP fixe dans votre box. Jamais testé avec un vrai module. Intégration non officielle, sans lien avec nasWebio."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-nasweb/blob/main/docs/fr.md",
+          "label": { "en": "Guide (French)", "fr": "Guide (français)" }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-nasweb/blob/main/docs/en.md",
+          "label": { "en": "Guide (English)", "fr": "Guide (anglais)" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
+      "key": "device_address",
+      "type": "string",
+      "label": { "en": "Address of the module", "fr": "Adresse du module" },
       "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+        "en": "The IP address of the module (the one of its web page), optionally with its HTTPS port (443 by default).",
+        "fr": "L’adresse IP du module (celle de sa page web), éventuellement avec son port HTTPS (443 par défaut)."
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
+      "placeholder": { "en": "192.168.1.50", "fr": "192.168.1.50" },
       "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "default": ""
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
+      "key": "username",
+      "type": "string",
+      "label": { "en": "Login of the module", "fr": "Identifiant du module" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "The login of the web page of the module.",
+        "fr": "L’identifiant de la page web du module."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
       "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "default": ""
     },
     {
-      "key": "unit",
+      "key": "password",
+      "type": "secret",
+      "label": { "en": "Password of the module", "fr": "Mot de passe du module" },
+      "description": {
+        "en": "Kept by Gladys in its database, never shown again, sent only to the module (as the module expects it, a SHA-1 hash, over the HTTPS connection whose certificate is pinned).",
+        "fr": "Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement au module (comme il l’attend, une empreinte SHA-1, par la connexion HTTPS dont le certificat est épinglé)."
+      },
+      "required": true
+    },
+    {
+      "key": "push_section",
+      "type": "section",
+      "label": { "en": "How the states arrive", "fr": "Comment arrivent les états" },
+      "description": {
+        "en": "The module sends its states to http://<address of Gladys>:{{port:nasweb_push}}/ (port chosen by Gladys; {{gladys_host}} is how your browser reaches Gladys). Type below the IP address of the Gladys machine as the module reaches it on your network: the integration subscribes the module itself, with a secret address. Allow this port in the firewall of the Gladys machine if it has one.",
+        "fr": "Le module envoie ses états à http://<adresse de Gladys>:{{port:nasweb_push}}/ (port choisi par Gladys ; {{gladys_host}} est l’adresse par laquelle votre navigateur joint Gladys). Saisissez ci-dessous l’adresse IP de la machine Gladys telle que le module la joint sur votre réseau : l’intégration abonne le module elle-même, avec une adresse secrète. Autorisez ce port dans le pare-feu de la machine Gladys s’il y en a un."
+      }
+    },
+    {
+      "key": "callback_address",
+      "type": "string",
+      "label": { "en": "Address of Gladys", "fr": "Adresse de Gladys" },
+      "description": {
+        "en": "The IP address of the machine running Gladys on your local network, without a port.",
+        "fr": "L’adresse IP de la machine qui fait tourner Gladys sur votre réseau local, sans port."
+      },
+      "placeholder": { "en": "192.168.1.10", "fr": "192.168.1.10" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "check_push_source",
+      "type": "boolean",
+      "label": {
+        "en": "Check the sender of the states",
+        "fr": "Vérifier l’expéditeur des états"
+      },
+      "description": {
+        "en": "Accept states only from the address of the module. Turn it off only if the status says the states come from another address because Docker hides the real one on this machine.",
+        "fr": "N’accepter les états que de l’adresse du module. À désactiver seulement si l’état dit que les états viennent d’une autre adresse parce que Docker masque la vraie sur cette machine."
+      },
+      "required": false,
+      "default": true
+    },
+    {
+      "key": "outputs_section",
+      "type": "section",
+      "label": { "en": "Relay outputs", "fr": "Sorties relais" },
+      "description": {
+        "en": "A relay may drive a lamp, but also a pump, a boiler, a heater or a gate. A switch is reached by \"turn everything off\" of voice assistants and scenes: so only the outputs you declare safe become switches; the others stay read only. Commands stay off until you allow them.",
+        "fr": "Un relais peut commander une lampe, mais aussi une pompe, une chaudière, un chauffage ou un portail. Un interrupteur est atteint par « tout éteindre » des assistants vocaux et des scènes : seules les sorties que vous déclarez sûres deviennent des interrupteurs ; les autres restent en lecture seule. Les commandes restent désactivées tant que vous ne les autorisez pas."
+      }
+    },
+    {
+      "key": "safe_outputs",
+      "type": "string",
+      "label": { "en": "Outputs declared safe", "fr": "Sorties déclarées sûres" },
+      "description": {
+        "en": "The numbers of the outputs (parameter NASWEB_OUTPUT in the Discovery tab), separated by commas. Only loads that may be switched off or on at any time (a lamp, a socket for a lamp).",
+        "fr": "Les numéros des sorties (paramètre NASWEB_OUTPUT dans l’onglet Découverte), séparés par des virgules. Seulement des charges qu’on peut couper ou allumer à tout moment (une lampe, une prise de lampe)."
+      },
+      "placeholder": { "en": "1, 2, 5", "fr": "1, 2, 5" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "allow_commands",
+      "type": "boolean",
+      "label": { "en": "Allow the commands", "fr": "Autoriser les commandes" },
+      "description": {
+        "en": "Off: the outputs declared safe are shown as switches but every command is refused.",
+        "fr": "Désactivé : les sorties déclarées sûres apparaissent comme interrupteurs mais toute commande est refusée."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "language",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "label": { "en": "Language of the messages", "fr": "Langue des messages" },
       "required": false,
-      "default": "celsius",
+      "default": "fr",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
+        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
       ]
-    },
-    {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
-      "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
-      },
-      "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "description": {
+        "en": "Reads the module with the saved configuration (even after a refused login) and subscribes it to the states.",
+        "fr": "Lit le module avec la configuration enregistrée (même après un identifiant refusé) et l’abonne aux états."
+      },
       "timeout_seconds": 30
     },
     {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+      "key": "trust_device",
+      "label": {
+        "en": "Trust the device now answering",
+        "fr": "Faire confiance à l’appareil qui répond"
       },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
       "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
+        "en": "Only after the status said the certificate or the serial number of the module changed (a module replaced or updated): two clicks: the first one shows what answers, a second one within 60 s trusts exactly that, then reads the module.",
+        "fr": "Seulement après que l’état a signalé un changement du certificat ou du numéro de série du module (module remplacé ou mis à jour) : deux clics : le premier montre ce qui répond, un second dans les 60 s approuve exactement cela, puis lit le module."
       },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "timeout_seconds": 30
     }
   ]
 }

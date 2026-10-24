@@ -5,19 +5,23 @@ contributors.
 
 ## What this is
 
-A Gladys Assistant **external integration**: a Node.js service (Node 22+, ESM,
-no build step) that runs in its own sandboxed Docker container and talks to
-Gladys through
+A Gladys Assistant **external integration** for a NASweb module (nasWebio,
+local HTTPS API, no cloud): a Node.js service (Node 22+, ESM, no build step)
+that runs in its own sandboxed Docker container and talks to Gladys through
 [`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
 its only runtime dependency. It started from the official JavaScript template.
+The same image also runs the `nasweb-push` sub-container (the HTTP endpoint
+the module pushes its states to). See `TODO.md` for the status and the
+decisions.
 
 ## Commands
 
 ```bash
 npm install
 npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+node --test test/app.test.js              # one file
+node --test --test-name-pattern "command" # tests whose name matches
+npm run cover                             # regenerate cover.png (800×534)
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
@@ -31,46 +35,58 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+index.js                          SDK wiring only: src/handlers.js registered before connect()
+src/handlers.js                   the SDK handlers -> NaswebApp (shared with the tests)
+src/app.js                        NaswebApp: identity, pin, subscription, pushes, commands, buttons
+src/nasweb/client.js              the module API (webio-api 0.1.12): device info, setOutput, subscription
+src/nasweb/http.js                one HTTPS request per TLS connection, the pin checked before any byte
+src/nasweb/status.js              the pushed status -> outputs, inputs, temperature (pure)
+src/model.js                      -> Gladys devices and routing (pure)
+src/publisher.js                  states within the rate limit (250/min)
+src/store.js                      /data/nasweb.json (identity, pin, subscription, login stop)
+src/channel.js                    private TCP channel, mutual HMAC challenge-response
+src/receiver.js, src/push/        the nasweb-push sub-container (HTTP push endpoint)
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
-gladys-assistant-integration.json manifest: name, config_schema, actions, image...
+src/constants.js, src/i18n.js     frozen keys, limits, timings; texts in English and French
+scripts/cover.mjs                 cover.png generator (plain Node)
+gladys-assistant-integration.json manifest: name, config_schema, actions, containers, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, against the SDK's fake Gladys, a local TLS server
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
 
 ## Rules
 
-- **External ids are forever.** Build them with
-  `gladys.externalIds(type, platformId)`, `platformId` being the unique id the
-  platform gives the device (serial, cloud id, MAC), never a label. Gladys keys
-  devices, their history, scenes and dashboards on them: changing one creates a
-  new device and orphans the old one. The same goes for every key users store:
-  manifest `config_schema`, `actions`, widget and scene keys, feature keys.
-- **The container rootfs is read-only.** Write only under `/data`, the one
-  writable volume. Never log tokens, passwords or API keys.
+- **External ids are forever.** `module:<serial>`, `output:<serial>-<index>`,
+  `input:<serial>-<index>`, the serial being `devSN` without dashes, and the
+  feature roles of `src/constants.js`. Changing one creates new devices and
+  orphans the old ones. The same goes for the manifest `config_schema` and
+  `actions` keys.
+- **Relays.** A relay output is a switch ONLY when declared safe
+  (`safe_outputs`); every other output stays read only. Commands are refused
+  unless `allow_commands` (off by default). Never add a switch, a light or a
+  button for an output that is not declared safe.
+- **Commands** decide on fresh facts: the identity read again before the
+  write, `beforeSend` right before the bytes leave, a recent push required,
+  confirmation only by a pushed status equal to the requested state. A
+  request that may have left is never answered "not sent".
+- **Secrets.** The password (and its SHA-1, as good as the password for the
+  module), the login, the push and channel tokens: never in the logs, in
+  `/data`, in a status or an error. A secret field is kept by Gladys in its
+  database as it is and only hidden in the interface: say so, nothing more.
+- **The certificate is pinned** at the first connection, in `/data` before the
+  login leaves; another one is never learned blindly (two clicks on "Trust
+  the device now answering").
+- **The container rootfs is read-only.** Write only under `/data`.
 - **Versions belong to the Release workflow** (Actions → Release). Never edit
-  `version` in `package.json` or in the manifest, nor the `docker_image` tag,
-  by hand — except on the README's hand-pushed tag path, which bumps all three
-  together before tagging. `test/manifest.test.js` checks they agree.
+  `version` in `package.json` or in the manifest, nor the `docker_image` tags
+  (main and sub-container), by hand. `test/manifest.test.js` checks they agree.
 - **Changelog.** Every user-visible change adds a line under `## [Unreleased]`
-  in `CHANGELOG.md` (`### Added`, `Changed`, `Fixed`, `Removed`, `Security`).
-  Never write a version heading: the Release workflow moves the section, and it
-  becomes the notes of the GitHub Release.
-- **Manifest.** Texts are multi-language objects `{ "en": ..., "fr": ... }`:
-  `label`, `description` and `placeholder` alike, never a plain string. The
-  catalog `description` holds 10 to 100 characters per language. A field the
-  older cores do not know needs a higher `gladys_version` minimum
-  (`categories`: 4.86.0; `widgets`, `scene_triggers`, `scene_actions`,
-  `type: "provider"`: 5.1.0). `test/manifest.test.js` ties the manifest to the
-  code (defaults, action, scene and widget handlers): change both sides
+  in `CHANGELOG.md`. Never write a version heading.
+- **Manifest.** Texts are multi-language objects `{ "en": ..., "fr": ... }`.
+  `test/manifest.test.js` ties the manifest to the code: change both sides
   together.
-- **User-facing text** is bilingual (English and French): action messages,
-  manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
-- **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
-  in English. Tests never touch the network.
+- **Rate.** Gladys accepts 300 states a minute: everything goes through the
+  publisher (250 a minute).
+- **Encoding.** Every file is UTF-8 without BOM; `test/encoding.test.js`
+  refuses mojibake and control bytes.

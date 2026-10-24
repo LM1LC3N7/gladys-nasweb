@@ -1,16 +1,20 @@
 {
-  "name": "gladys-integration-template-js",
-  "version": "1.0.0",
+  "name": "gladys-nasweb",
+  "version": "0.1.0",
   "private": true,
-  "description": "Official starter template to build an external integration for Gladys Assistant with the JavaScript SDK.",
+  "description": "Gladys Assistant external integration for NASweb modules (relay outputs, inputs, temperature), over the local API of the module. Unofficial, not affiliated with nasWebio.",
   "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "receiver": "node src/receiver.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --test"
+    "test": "node --test",
+    "audit": "npm audit --omit=dev",
+    "cover": "node scripts/cover.mjs",
+    "validate:manifest": "npx --yes github:GladysAssistant/integration-store ."
   },
   "engines": {
     "node": ">=22"

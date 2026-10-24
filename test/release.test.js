@@ -31,8 +31,11 @@ test('bumpManifest only changes version and docker_image, keeping the layout', a
   assert.equal(manifest.version, '9.8.7');
   assert.equal(manifest.docker_image, 'ghcr.io/me/my-integration:9.8.7');
 
+  // The nasweb-push sub-container runs the same image: it follows the release.
+  assert.equal(manifest.containers[0].docker_image, 'ghcr.io/me/my-integration:9.8.7');
+
   const changedLines = bumped.split('\n').filter((line, i) => line !== text.split('\n')[i]);
-  assert.equal(changedLines.length, 2);
+  assert.equal(changedLines.length, 3);
   await assertPrettierClean(bumped, manifestPath);
 });
 
