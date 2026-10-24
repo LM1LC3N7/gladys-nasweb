@@ -42,11 +42,13 @@ le module à `http://<adresse de Gladys>:<ce port>/nasweb/<secret>` :
   autrement) à chaque envoi : qui peut voir ce trafic sur votre réseau
   (Wi-Fi ouvert, port miroir, usurpation ARP) peut la lire et envoyer ;
 - le récepteur n’accepte que cette adresse et la méthode POST, 32 Ko au
-  plus, 240 envois par minute en tout ; un expéditeur autre que le module
-  (quand son adresse est vérifiée) ou au-delà de 60 par minute voit son
-  dernier envoi gardé jusqu’à ce que sa minute se libère. 32 connexions au
+  plus. Avec l’expéditeur vérifié, le module peut envoyer 240 fois par
+  minute et tout autre expéditeur est refusé (403) ; sinon chaque expéditeur
+  peut envoyer 60 fois par minute (240 en tout), et au-delà son dernier envoi
+  est gardé puis transmis dès que sa minute se libère. 32 connexions au
   plus, 4 par expéditeur, 4 gardées pour le module : au-delà, la plus
-  ancienne connexion qui n’a encore rien envoyé est fermée, pas la nouvelle.
+  ancienne connexion dont la requête n’est pas complète est fermée (d’abord
+  une qui n’a rien envoyé), pas la nouvelle.
   Une connexion qui n’envoie rien est fermée en 10 s au plus (5 s environ),
   et une requête doit arriver entière en 11 s environ ; tout le reste est
   refusé ;

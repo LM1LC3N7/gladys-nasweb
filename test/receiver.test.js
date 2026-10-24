@@ -374,3 +374,35 @@ test('the channel: a line too long drops the connection; lines split anywhere ar
     await server.stop();
   }
 });
+
+test('sender not checked, a flood of connections: a push sent in 3 pieces is served', async () => {
+  const svc = await service({ IDLE_MS: '400' });
+  const stop = silentAttack(svc.port, ['127.0.0.1'], 8);
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    for (let round = 0; round < 5; round += 1) {
+      const status = await new Promise((resolve) => {
+        const socket = netModule.connect({ host: '127.0.0.1', port: svc.port });
+        let text = '';
+        socket.on('error', (err) => resolve(err.code));
+        socket.on('data', (chunk) => (text += chunk));
+        socket.on('close', () => resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(text)?.[1] ?? 0)));
+        const pieces = [
+          `POST /nasweb/${PUSH} HT`,
+          'TP/1.1\r\nHost: x\r\nContent-Le',
+          'ngth: 2\r\n\r\n{}',
+        ];
+        socket.on('connect', async () => {
+          for (const piece of pieces) {
+            socket.write(piece);
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        });
+      });
+      assert.equal(status, 200, `round ${round}`);
+    }
+  } finally {
+    stop();
+    await svc.stop();
+  }
+});

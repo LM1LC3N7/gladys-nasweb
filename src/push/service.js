@@ -16,7 +16,8 @@
 //
 // Bounded for a 64 MB container: 32 connections at most, 4 per source
 // address, 4 kept for DEVICE_ADDRESS when set; over a limit the OLDEST
-// connection that has not sent its headers yet is closed, never the newcomer
+// connection whose request is not complete is closed (one that sent no byte
+// first, then one with partial headers), never the newcomer
 // of the module (it sends its request as soon as it connects). A connection
 // that sends nothing is closed within 10 s (the headers timeout closes it at
 // about 5 s, our own timer at 10 s), the headers must arrive within 5 s and
@@ -210,13 +211,19 @@ export async function startPushService({ env = process.env, logger, now = Date.n
   }
 
   const isDevice = (socket) => device !== '' && socket.nwFrom === device;
-  /** Closes the oldest connection that has not sent its headers yet, among `which`. */
+  /**
+   * Closes the oldest connection whose request is not complete, among `which`:
+   * first one that has sent no byte at all, only then one with partial headers
+   * (a module sending its headers in pieces is never the first to go).
+   */
   const evictOldestSilent = (which) => {
-    for (const socket of conns) {
-      if (!socket.nwRequested && which(socket)) {
-        conns.delete(socket);
-        socket.destroy();
-        return true;
+    for (const pass of [(socket) => socket.bytesRead === 0, () => true]) {
+      for (const socket of conns) {
+        if (!socket.nwRequested && which(socket) && pass(socket)) {
+          conns.delete(socket);
+          socket.destroy();
+          return true;
+        }
       }
     }
     return false;

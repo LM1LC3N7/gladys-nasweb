@@ -41,11 +41,12 @@ reload the screen. The integration subscribes the module itself to
   whoever can see this traffic on your network (open Wi-Fi, port mirroring,
   ARP spoofing) can read it and post;
 - the receiver accepts exactly that address and the POST method, 32 KB at
-  most, 240 posts a minute in all; another sender than the module (when its
-  address is checked) or a sender over 60 a minute has its latest post held
-  until its minute frees. 32 connections at most, 4 per sender, 4 kept for
-  the module: over a limit, the oldest connection that has sent nothing yet
-  is closed, not the new one. A connection that sends nothing is closed
+  most. With the sender checked, the module may post 240 times a minute and
+  any other sender is refused (403); otherwise each sender may post 60 times
+  a minute (240 in all), and beyond that its latest post is kept and sent
+  once its minute frees. 32 connections at most, 4 per sender, 4 kept for
+  the module: over a limit, the oldest connection whose request is not
+  complete is closed (one that sent nothing first), not the new one. A connection that sends nothing is closed
   within 10 s (about 5 s), and a request must arrive whole within about
   11 s; everything else is refused;
 - with **Check the sender of the states** (on by default), only the address
