@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-24
+
 ### Added
 
 - A NASweb module (nasWebio) over its local HTTPS API, without any cloud:
@@ -26,4 +28,5 @@ the notes of the version's GitHub Release.
 - A refused login stops everything (persisted), without automatic retry.
 - "Test the connection" and "Trust the device now answering" buttons.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-nasweb/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-nasweb/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-nasweb/releases/tag/v0.1.1

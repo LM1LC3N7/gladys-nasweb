@@ -1,6 +1,6 @@
 {
   "name": "gladys-nasweb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for NASweb modules (relay outputs, inputs, temperature), over the local API of the module. Unofficial, not affiliated with nasWebio.",
   "type": "module",
