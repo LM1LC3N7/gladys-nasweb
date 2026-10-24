@@ -119,11 +119,11 @@ test('refused: another path or token (404), another method (405), too large (413
   }
 });
 
-test('120 pushes a minute at most', async () => {
+test('60 pushes a minute per source address', async () => {
   let time = 0;
   const svc = await service({ now: () => time });
   try {
-    for (let i = 0; i < 120; i += 1) {
+    for (let i = 0; i < 60; i += 1) {
       assert.equal((await send(svc.port)).status, 200);
     }
     assert.equal((await send(svc.port)).status, 429);
@@ -131,6 +131,69 @@ test('120 pushes a minute at most', async () => {
     assert.equal((await send(svc.port)).status, 200);
   } finally {
     await svc.stop();
+  }
+});
+
+test('with DEVICE_ADDRESS, another sender gets 403 before any budget; the main container is told', async () => {
+  const svc = await startPushService({
+    env: {
+      PUSH_TOKEN: PUSH,
+      CHANNEL_TOKEN: CHANNEL,
+      HTTP_PORT: '0',
+      CHANNEL_PORT: '0',
+      HTTP_HOST: '127.0.0.1',
+      DEVICE_ADDRESS: '192.168.1.50',
+    },
+  });
+  const main = client(svc.channel.port);
+  try {
+    await main.up;
+    for (let i = 0; i < 100; i += 1) {
+      assert.equal((await send(svc.port, { body: '{"x":1}' })).status, 403);
+    }
+    await until(() => main.messages.length > 0);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(main.messages.length, 1, 'one notice per 10 s, never the body');
+    assert.deepEqual(Object.keys(main.messages[0]).sort(), ['at', 'from', 'type']);
+    assert.equal(main.messages[0].type, 'refused');
+  } finally {
+    main.channel.stop();
+    await svc.stop();
+  }
+});
+
+test('idle connections: closed from their acceptance; capped in all and per source', async () => {
+  const { connect } = await import('node:net');
+  const fast = await startPushService({
+    env: {
+      PUSH_TOKEN: PUSH,
+      CHANNEL_TOKEN: CHANNEL,
+      HTTP_PORT: '0',
+      CHANNEL_PORT: '0',
+      HTTP_HOST: '127.0.0.1',
+      IDLE_MS: '300',
+    },
+  });
+  try {
+    const closed = [];
+    for (let i = 0; i < 300; i += 1) {
+      const socket = connect({ host: '127.0.0.1', port: fast.port });
+      socket.on('error', () => {});
+      socket.resume();
+      socket.on('close', () => closed.push(i));
+    }
+    await until(() => closed.length >= 296);
+    const held = await new Promise((resolve) => fast.http.getConnections((_, n) => resolve(n)));
+    assert.ok(held <= 4, `${held} connections held for one source address`);
+    for (let i = 0; i < 300 && closed.length < 300; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(closed.length, 300, 'the idle ones closed too');
+    const started = Date.now();
+    assert.equal((await send(fast.port)).status, 200);
+    assert.ok(Date.now() - started < 1000);
+  } finally {
+    await fast.stop();
   }
 });
 

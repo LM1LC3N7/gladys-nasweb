@@ -72,8 +72,13 @@ export const LIMITS = {
   statesPerMinute: 250,
   /** A push body: a status of a few dozen outputs and inputs is a few KB. */
   pushBytes: 32 * 1024,
-  /** Pushes accepted per minute by the receiver (the module pushes far less). */
-  pushesPerMinute: 120,
+  /** Pushes accepted per minute by the receiver, in all and per source address. */
+  pushesPerMinute: 240,
+  pushesPerSource: 60,
+  /** Connections of the receiver: in all, per source address, idle time before closing. */
+  receiverConnections: 32,
+  receiverConnectionsPerSource: 4,
+  receiverIdleMs: 10_000,
   /** Pushes kept by the receiver while the main container is away (only the latest matter). */
   pushQueue: 5,
   /** An answer of the module (device info, OK): a few hundred bytes. */
@@ -110,6 +115,8 @@ export const TIMINGS = {
   stateHeartbeat: 30 * MINUTE,
   /** The new devices of a push are published together. */
   rebuildDebounce: SECOND,
+  /** The status after refused pushes is updated at most this often. */
+  refusedStatusEvery: 10 * SECOND,
   /** "Test the connection" reads at most this often. */
   testCooldown: 10 * SECOND,
   /** The second click of "Trust the device now answering" within this time. */

@@ -44,13 +44,21 @@ export function fileStore(path = STATE_FILE) {
   // One write at a time: two saves never share the temporary file.
   let chain = Promise.resolve();
   return {
+    /** null when there is no file yet; throws when it exists but cannot be read. */
     async load() {
+      let text;
       try {
-        const text = await readFile(path, 'utf8');
-        return text.length > 8192 ? null : JSON.parse(text);
-      } catch {
-        return null;
+        text = await readFile(path, 'utf8');
+      } catch (err) {
+        if (err?.code === 'ENOENT') {
+          return null;
+        }
+        throw err;
       }
+      if (text.length > 8192) {
+        throw Object.assign(new Error('Too large'), { code: 'ETOOBIG' });
+      }
+      return JSON.parse(text);
     },
     save(data) {
       const text = JSON.stringify(data);
@@ -66,12 +74,16 @@ export function fileStore(path = STATE_FILE) {
 }
 
 /** For the tests: the same JSON round trip as the file; `failing` refuses every save. */
-export function memoryStore(initial = null, { failing = false } = {}) {
+export function memoryStore(initial = null, { failing = false, unreadable = false } = {}) {
   return {
     data: initial === null ? null : JSON.parse(JSON.stringify(initial)),
     saves: 0,
     failing,
+    unreadable,
     async load() {
+      if (this.unreadable) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
       return this.data === null ? null : JSON.parse(JSON.stringify(this.data));
     },
     async save(data) {

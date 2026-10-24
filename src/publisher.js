@@ -60,6 +60,11 @@ export class StatePublisher {
     this.pending.set(featureId, value);
   }
 
+  /** Drops every pending value (they are no longer recent). */
+  clear() {
+    this.pending.clear();
+  }
+
   /** Forget a device (deleted): its pending values are dropped. */
   forget(deviceId) {
     for (const map of [this.pending, this.lastSent]) {

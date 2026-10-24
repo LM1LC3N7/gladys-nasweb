@@ -50,30 +50,45 @@
       "links": [
         {
           "url": "https://github.com/LM1LC3N7/gladys-nasweb/blob/main/docs/fr.md",
-          "label": { "en": "Guide (French)", "fr": "Guide (français)" }
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
         },
         {
           "url": "https://github.com/LM1LC3N7/gladys-nasweb/blob/main/docs/en.md",
-          "label": { "en": "Guide (English)", "fr": "Guide (anglais)" }
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
       "key": "device_address",
       "type": "string",
-      "label": { "en": "Address of the module", "fr": "Adresse du module" },
+      "label": {
+        "en": "Address of the module",
+        "fr": "Adresse du module"
+      },
       "description": {
         "en": "The IP address of the module (the one of its web page), optionally with its HTTPS port (443 by default).",
         "fr": "L’adresse IP du module (celle de sa page web), éventuellement avec son port HTTPS (443 par défaut)."
       },
-      "placeholder": { "en": "192.168.1.50", "fr": "192.168.1.50" },
+      "placeholder": {
+        "en": "192.168.1.50",
+        "fr": "192.168.1.50"
+      },
       "required": true,
       "default": ""
     },
     {
       "key": "username",
       "type": "string",
-      "label": { "en": "Login of the module", "fr": "Identifiant du module" },
+      "label": {
+        "en": "Login of the module",
+        "fr": "Identifiant du module"
+      },
       "description": {
         "en": "The login of the web page of the module.",
         "fr": "L’identifiant de la page web du module."
@@ -84,7 +99,10 @@
     {
       "key": "password",
       "type": "secret",
-      "label": { "en": "Password of the module", "fr": "Mot de passe du module" },
+      "label": {
+        "en": "Password of the module",
+        "fr": "Mot de passe du module"
+      },
       "description": {
         "en": "Kept by Gladys in its database, never shown again, sent only to the module (as the module expects it, a SHA-1 hash, over the HTTPS connection whose certificate is pinned).",
         "fr": "Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement au module (comme il l’attend, une empreinte SHA-1, par la connexion HTTPS dont le certificat est épinglé)."
@@ -94,21 +112,30 @@
     {
       "key": "push_section",
       "type": "section",
-      "label": { "en": "How the states arrive", "fr": "Comment arrivent les états" },
+      "label": {
+        "en": "How the states arrive",
+        "fr": "Comment arrivent les états"
+      },
       "description": {
-        "en": "The module sends its states to http://<address of Gladys>:{{port:nasweb_push}}/ (port chosen by Gladys; {{gladys_host}} is how your browser reaches Gladys). Type below the IP address of the Gladys machine as the module reaches it on your network: the integration subscribes the module itself, with a secret address. Allow this port in the firewall of the Gladys machine if it has one.",
-        "fr": "Le module envoie ses états à http://<adresse de Gladys>:{{port:nasweb_push}}/ (port choisi par Gladys ; {{gladys_host}} est l’adresse par laquelle votre navigateur joint Gladys). Saisissez ci-dessous l’adresse IP de la machine Gladys telle que le module la joint sur votre réseau : l’intégration abonne le module elle-même, avec une adresse secrète. Autorisez ce port dans le pare-feu de la machine Gladys s’il y en a un."
+        "en": "The module sends its states to http://<address of Gladys>:{{port:nasweb_push}}/ (port chosen by Gladys; {{gladys_host}} is how your browser reaches Gladys). The port exists once the address of the module, the login and the password are saved: save, then reload this screen. Type below the IP address of the Gladys machine as the module reaches it: the integration subscribes the module itself, with a secret address (sent in clear over HTTP by the module). Allow this port in the firewall of the Gladys machine if it has one.",
+        "fr": "Le module envoie ses états à http://<adresse de Gladys>:{{port:nasweb_push}}/ (port choisi par Gladys ; {{gladys_host}} est l’adresse par laquelle votre navigateur joint Gladys). Le port existe une fois enregistrés l’adresse du module, l’identifiant et le mot de passe : enregistrez, puis rechargez cet écran. Saisissez ci-dessous l’adresse IP de la machine Gladys telle que le module la joint : l’intégration abonne le module elle-même, avec une adresse secrète (envoyée en clair, en HTTP, par le module). Autorisez ce port dans le pare-feu de la machine Gladys s’il y en a un."
       }
     },
     {
       "key": "callback_address",
       "type": "string",
-      "label": { "en": "Address of Gladys", "fr": "Adresse de Gladys" },
+      "label": {
+        "en": "Address of Gladys",
+        "fr": "Adresse de Gladys"
+      },
       "description": {
         "en": "The IP address of the machine running Gladys on your local network, without a port.",
         "fr": "L’adresse IP de la machine qui fait tourner Gladys sur votre réseau local, sans port."
       },
-      "placeholder": { "en": "192.168.1.10", "fr": "192.168.1.10" },
+      "placeholder": {
+        "en": "192.168.1.10",
+        "fr": "192.168.1.10"
+      },
       "required": false,
       "default": ""
     },
@@ -120,8 +147,8 @@
         "fr": "Vérifier l’expéditeur des états"
       },
       "description": {
-        "en": "Accept states only from the address of the module. Turn it off only if the status says the states come from another address because Docker hides the real one on this machine.",
-        "fr": "N’accepter les états que de l’adresse du module. À désactiver seulement si l’état dit que les états viennent d’une autre adresse parce que Docker masque la vraie sur cette machine."
+        "en": "Accept states only from the address of the module. Turn it off only if the status says the states come from another address because Docker hides the real one on this machine: then anyone who has read the secret address can post forged states, and so start your scenes.",
+        "fr": "N’accepter les états que de l’adresse du module. À désactiver seulement si l’état dit que les états viennent d’une autre adresse parce que Docker masque la vraie sur cette machine : quiconque a lu l’adresse secrète peut alors envoyer de faux états, et donc lancer vos scènes."
       },
       "required": false,
       "default": true
@@ -129,7 +156,10 @@
     {
       "key": "outputs_section",
       "type": "section",
-      "label": { "en": "Relay outputs", "fr": "Sorties relais" },
+      "label": {
+        "en": "Relay outputs",
+        "fr": "Sorties relais"
+      },
       "description": {
         "en": "A relay may drive a lamp, but also a pump, a boiler, a heater or a gate. A switch is reached by \"turn everything off\" of voice assistants and scenes: so only the outputs you declare safe become switches; the others stay read only. Commands stay off until you allow them.",
         "fr": "Un relais peut commander une lampe, mais aussi une pompe, une chaudière, un chauffage ou un portail. Un interrupteur est atteint par « tout éteindre » des assistants vocaux et des scènes : seules les sorties que vous déclarez sûres deviennent des interrupteurs ; les autres restent en lecture seule. Les commandes restent désactivées tant que vous ne les autorisez pas."
@@ -138,19 +168,28 @@
     {
       "key": "safe_outputs",
       "type": "string",
-      "label": { "en": "Outputs declared safe", "fr": "Sorties déclarées sûres" },
+      "label": {
+        "en": "Outputs declared safe",
+        "fr": "Sorties déclarées sûres"
+      },
       "description": {
         "en": "The numbers of the outputs (parameter NASWEB_OUTPUT in the Discovery tab), separated by commas. Only loads that may be switched off or on at any time (a lamp, a socket for a lamp).",
         "fr": "Les numéros des sorties (paramètre NASWEB_OUTPUT dans l’onglet Découverte), séparés par des virgules. Seulement des charges qu’on peut couper ou allumer à tout moment (une lampe, une prise de lampe)."
       },
-      "placeholder": { "en": "1, 2, 5", "fr": "1, 2, 5" },
+      "placeholder": {
+        "en": "1, 2, 5",
+        "fr": "1, 2, 5"
+      },
       "required": false,
       "default": ""
     },
     {
       "key": "allow_commands",
       "type": "boolean",
-      "label": { "en": "Allow the commands", "fr": "Autoriser les commandes" },
+      "label": {
+        "en": "Allow the commands",
+        "fr": "Autoriser les commandes"
+      },
       "description": {
         "en": "Off: the outputs declared safe are shown as switches but every command is refused.",
         "fr": "Désactivé : les sorties déclarées sûres apparaissent comme interrupteurs mais toute commande est refusée."
@@ -161,19 +200,37 @@
     {
       "key": "language",
       "type": "select",
-      "label": { "en": "Language of the messages", "fr": "Langue des messages" },
+      "label": {
+        "en": "Language of the messages",
+        "fr": "Langue des messages"
+      },
       "required": false,
       "default": "fr",
       "options": [
-        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
-        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
       ]
     }
   ],
   "actions": [
     {
       "key": "test_connection",
-      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
       "description": {
         "en": "Reads the module with the saved configuration (even after a refused login) and subscribes it to the states.",
         "fr": "Lit le module avec la configuration enregistrée (même après un identifiant refusé) et l’abonne aux états."

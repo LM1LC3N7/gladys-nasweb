@@ -29,21 +29,34 @@ The module **pushes** its states: it posts them to an address it was given
 (a "status subscription"). The integration container cannot receive
 anything from the network, so Gladys starts a small **receiver** next to it
 (the `nasweb-push` container, same image) and publishes one port for it,
-chosen by Gladys and shown in the configuration screen. The integration
-subscribes the module itself to `http://<address of Gladys>:<that port>/nasweb/<secret>`:
+chosen by Gladys. The receiver starts, and its port exists, only once the
+address of the module, the login and the password are saved: until then the
+configuration screen shows `{{port:nasweb_push}}` as is; save first, then
+reload the screen. The integration subscribes the module itself to
+`http://<address of Gladys>:<that port>/nasweb/<secret>`:
 
 - the secret part is random, generated once for your installation, kept in
-  the Gladys configuration (never shown), and never written to the logs;
-- the receiver accepts exactly that address, the POST method, 32 KB at most
-  and 120 posts a minute at most; everything else is refused;
-- the integration then accepts a status only if it comes **from the address
-  of the module** (option "Check the sender of the states") and carries
-  **its serial number**.
+  the Gladys configuration (never shown), and never written to the logs. It
+  travels **in clear** (HTTP, the module posts no other way) at every post:
+  whoever can see this traffic on your network (open Wi-Fi, port mirroring,
+  ARP spoofing) can read it and post;
+- the receiver accepts exactly that address and the POST method, 32 KB at
+  most, 60 posts a minute per sender and 240 in all, 32 connections at most
+  (4 per sender); a connection that sends nothing is closed within 10 s (about 5 s), and a request must
+  arrive whole within about 11 s; everything else is refused;
+- with **Check the sender of the states** (on by default), only the address
+  of the module may post: the receiver refuses the others before anything
+  else, and the integration checks again;
+- the integration then accepts a status only if it carries the **serial
+  number** of the module. That number is no secret (it is shown in the
+  status and in the NASWEB_SERIAL parameter): it only tells another module
+  apart, not an attacker.
 
 If Docker hides the real address of the sender on your machine (every
 status then seems to come from an address like 172.x.x.1, and the status
-says so), turn off "Check the sender of the states": the secret address and
-the serial number are still checked.
+says so), you may turn off "Check the sender of the states". Know what it
+lets through: anyone who has read the secret address can then post forged
+states (relays, inputs, temperature), and so start your scenes.
 
 There is no other way to read the states: if no status arrives for 90
 seconds, the devices are shown **unreachable**, the module is read again
@@ -92,18 +105,31 @@ A command on a switch is refused (nothing sent to the module) when:
 
 - "Allow the commands" is off, or the output is not declared safe;
 - the value is not exactly on (1) or off (0);
-- no status arrived from the module for 90 seconds (the result could not be
-  confirmed);
+- the module was never identified, or no longer reports this output;
+- the last status of the module was posted more than 90 seconds ago (the
+  result could not be confirmed);
 - the module refused the login, its certificate changed, or another serial
   number answers at its address;
-- a command for the same output is still running;
+- the saved state of the integration (`/data`) cannot be read;
+- the module does not answer, or answers with an error, while its identity
+  is read again;
+- the configuration changed during the command;
 - the module answers too slowly: the identity read and the command must
-  leave within 3.5 seconds of the click.
+  leave within 3.5 seconds of the click (a command on the same output first
+  waits for the write of the previous one).
 
 Before each command the integration reads the identity of the module again
-(its serial number). The command is confirmed only by a status of the module
-showing the requested state within about 4 seconds; otherwise Gladys shows
-"Sent, without confirmation".
+(its serial number). Once the command has left, the answer is one of:
+
+- success: a status posted after the write shows the requested state,
+  within about 4 seconds of the click;
+- "Sent, without confirmation": no such status in time, no answer from the
+  module, an error answer (HTTP code) or an unreadable one;
+- "the module answered that the command failed" (its answer is not "OK");
+- "the module refused the command (login refused)": the integration then
+  stops, as for a refused login;
+- "replaced by a newer command": another command on the same output left
+  before this one was confirmed.
 
 ## Security
 

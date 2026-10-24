@@ -97,6 +97,9 @@ class FakeModule {
     if (!this.loginOk) {
       throw new DeviceError(ERROR_KINDS.AUTH, 'Login refused');
     }
+    if (this.failAfter && kind === 'set') {
+      throw this.failAfter;
+    }
     return fn();
   }
 
@@ -187,8 +190,9 @@ async function setup({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     client: module,
     store,
-    now: () => clock.t,
-    clock: () => clock.t,
+    // A clock that moves at every reading (one reading per decision, lesson of lot 15).
+    now: () => (clock.t += 1),
+    clock: () => (clock.t += 1),
     timers,
     createChannel: (options) => {
       const channel = new FakeChannel(options);
@@ -206,10 +210,8 @@ async function setup({
     timers,
     channels,
     /** A push from `from`, as the receiver relays it. */
-    push(body = status(), from = '192.168.1.50') {
-      channels
-        .at(-1)
-        .emit('message', { type: 'push', from, at: new Date(clock.t).toISOString(), body });
+    push(body = status(), from = '192.168.1.50', at = clock.t) {
+      channels.at(-1).emit('message', { type: 'push', from, at: new Date(at).toISOString(), body });
     },
     async advance(ms) {
       clock.t += ms;
@@ -248,6 +250,7 @@ test('first start: pinned, identified, the receiver started, the module subscrib
     CHANNEL_TOKEN: tokens.channel_token,
     HTTP_PORT: '8080',
     CHANNEL_PORT: '7778',
+    DEVICE_ADDRESS: '192.168.1.50',
   });
   assert.equal(channels.length, 1);
   assert.equal(channels[0].options.token, tokens.channel_token);
@@ -327,7 +330,7 @@ test('pushes refused: another source address, another serial, a stale one', asyn
   assert.equal(gladys.fake.discoveredDevices.length, 0);
   assert.match(gladys.fake.connectionStatus.message.en, /refused: they came from 192\.168\.1\.99/);
   env.push(status().replace(SERIAL, 'FFFF0000'));
-  await env.advance(1500);
+  await env.advance(10_500);
   assert.equal(gladys.fake.discoveredDevices.length, 0);
   assert.match(gladys.fake.connectionStatus.message.en, /another serial number/);
   env.channels[0].emit('message', {
@@ -618,5 +621,200 @@ test('test button: reads now (even after a refused login), at most every 10 s', 
   assert.equal(env.store.data.auth.blocked, false);
   const again = await gladys.fake.action('test_connection');
   assert.match(again.data.message.en, /Wait a few seconds/);
+  app.stop();
+});
+
+// --- Review r1 ------------------------------------------------------------------
+
+test('r1-1a: a push kept by the receiver is dated by its time, not by its arrival', async () => {
+  const env = await setup({ config: { ...CONFIG, allow_commands: true } });
+  const { gladys, app, module } = env;
+  env.push(); // a first status, to have the devices
+  await env.advance(1500);
+  await env.createAll();
+  // 100 s later, a status the receiver kept 80 s arrives.
+  await env.advance(100_000);
+  env.push(status(), '192.168.1.50', env.clock.t - 80_000);
+  await env.advance(15_000);
+  // 95 s after the module posted it: no longer recent, whatever its arrival.
+  assert.equal(app.pushFresh(), false);
+  module.written = [];
+  const safe = env.device(id('output', `${SERIAL}-1`));
+  const ack = await gladys.fake.setValue(safe, safe.features[0], 1);
+  assert.match(ack.error, /No recent status/);
+  assert.deepEqual(module.written, []);
+  assert.ok(
+    gladys.fake.transports.filter((t) => t.transport === 'unreachable').length > 0,
+    'badges unreachable at the exact end of the freshness',
+  );
+  app.stop();
+});
+
+test('r1-1a: the badges turn unreachable at the exact end of the 90 s', async () => {
+  const env = await setup();
+  const { gladys, app } = env;
+  env.push();
+  await env.advance(1500);
+  await env.createAll();
+  const before = gladys.fake.transports.length;
+  await env.advance(88_000);
+  assert.equal(gladys.fake.transports.length, before);
+  await env.advance(1000);
+  assert.ok(gladys.fake.transports.slice(before).every((t) => t.transport === 'unreachable'));
+  assert.ok(gladys.fake.transports.length > before);
+  app.stop();
+});
+
+test('r1-1b: a status posted before the write never confirms the command', async () => {
+  const env = await setup({ config: { ...CONFIG, allow_commands: true } });
+  const { gladys, app, module } = env;
+  env.push(status({ 1: false, 2: false }));
+  await env.advance(1500);
+  const safe = env.device(id('output', `${SERIAL}-1`));
+  const old = env.clock.t; // the module posted ON before the command; delivered after the write
+  module.onSet = () =>
+    setImmediate(() => env.push(status({ 1: true, 2: false }), '192.168.1.50', old));
+  const pending = gladys.fake.setValue(safe, safe.features[0], 1);
+  await settle();
+  await env.advance(5000);
+  const ack = await pending;
+  assert.match(ack.error, /Sent, without confirmation/);
+  app.stop();
+});
+
+test('r1-1: an older status never overwrites a newer one', async () => {
+  const env = await setup();
+  const { gladys, app } = env;
+  env.push(status({ 1: true, 2: false }));
+  await env.advance(1500);
+  await env.createAll();
+  env.push(status({ 1: false, 2: false }), '192.168.1.50', env.clock.t - 5000);
+  await app.publisher.flush();
+  assert.equal(gladys.fake.lastState(id('output', `${SERIAL}-1`, 'power')), 1);
+  app.stop();
+});
+
+test('r1-2: no state published for 2 h without a push, the module still answering', async () => {
+  const env = await setup();
+  const { gladys, app, module } = env;
+  env.push();
+  await env.advance(1500);
+  await env.createAll();
+  let published = 0;
+  const original = gladys.publishChangedStates.bind(gladys);
+  gladys.publishChangedStates = (states, options) => {
+    published += states.length;
+    return original(states, options);
+  };
+  const reads = module.written.length;
+  for (let minute = 0; minute < 120; minute += 1) {
+    await env.advance(60_000);
+    await app.tick();
+    await app.publisher.flush();
+  }
+  assert.ok(module.written.length > reads + 100, 'the module was read every minute');
+  assert.equal(published, 0, 'never an old value republished as new');
+  // A device created now does not get the old values either.
+  await gladys.fake.deviceCreated(env.device(id('input', `${SERIAL}-1`)));
+  await app.publisher.flush();
+  assert.equal(published, 0);
+  app.stop();
+});
+
+test('r1-5: a newer command waits for the write of the previous one only, and replaces it', async () => {
+  const env = await setup({ config: { ...CONFIG, allow_commands: true } });
+  const { gladys, app, module } = env;
+  env.push(status({ 1: false, 2: false }));
+  await env.advance(1500);
+  const safe = env.device(id('output', `${SERIAL}-1`));
+  module.written = [];
+  const first = gladys.fake.setValue(safe, safe.features[0], 1); // the module does not push
+  await settle();
+  module.onSet = (index, state) => setImmediate(() => env.push(status({ 1: state, 2: false })));
+  const second = gladys.fake.setValue(safe, safe.features[0], 0);
+  const [a, b] = await Promise.all([first, second]);
+  assert.match(a.error, /replaced by a newer command/);
+  assert.equal(b.success, true, b.error);
+  assert.deepEqual(module.written, ['info', 'set', 'info', 'set'], 'both written, in order');
+  app.stop();
+});
+
+test('r1-6: the reasons say what happened to a write that left', async () => {
+  const env = await setup({ config: { ...CONFIG, allow_commands: true } });
+  const { gladys, app, module } = env;
+  env.push();
+  await env.advance(1500);
+  const safe = env.device(id('output', `${SERIAL}-1`));
+  module.failAfter = new DeviceError(ERROR_KINDS.HTTP, 'HTTP 500', { status: 500 });
+  const http = await gladys.fake.setValue(safe, safe.features[0], 1);
+  assert.match(http.error, /error \(HTTP 500\): sent, without confirmation/);
+  module.failAfter = new DeviceError(ERROR_KINDS.AUTH, 'Login refused');
+  const auth = await gladys.fake.setValue(safe, safe.features[0], 1);
+  assert.match(auth.error, /refused the command \(login refused\)/);
+  assert.equal(env.store.data.auth.blocked, true);
+  app.stop();
+});
+
+test('r1-6: the first trust click on a changed certificate says the serial was not read', async () => {
+  const env = await setup();
+  env.module.fingerprint = OTHER_PIN;
+  await env.advance(60_000);
+  await env.app.tick();
+  const first = await env.gladys.fake.action('trust_device');
+  assert.match(first.data.message.en, /serial number was not read/);
+  assert.match(first.data.message.en, /sends the login to this device/);
+  env.app.stop();
+});
+
+test('r1-8: refused pushes update the status at most every 10 s', async () => {
+  const env = await setup();
+  const { gladys, app } = env;
+  const before = gladys.fake.connectionStatuses.length;
+  for (let i = 0; i < 120; i += 1) {
+    env.push(status(), '192.168.1.99');
+    await env.advance(500);
+  }
+  const calls = gladys.fake.connectionStatuses.length - before;
+  assert.ok(calls >= 1 && calls <= 7, `${calls} statuses for 60 s of refused pushes`);
+  // The notice of the receiver counts too.
+  env.channels[0].emit('message', {
+    type: 'refused',
+    from: '192.168.1.98',
+    at: new Date(env.clock.t).toISOString(),
+  });
+  await env.advance(10_500);
+  assert.match(gladys.fake.connectionStatus.message.en, /came from 192\.168\.1\.98/);
+  app.stop();
+});
+
+test('r1-9: /data unreadable: nothing sent until the user tests the connection', async () => {
+  const store = memoryStore(
+    { target: '192.168.1.50:443', pin: PIN, serial: SERIAL },
+    { unreadable: true },
+  );
+  const module = new FakeModule();
+  module.fingerprint = OTHER_PIN;
+  const env = await setup({ store, module });
+  const { gladys, app } = env;
+  await env.advance(120_000);
+  await app.tick();
+  assert.deepEqual(module.written, [], 'nothing sent: the pin may be in the unreadable file');
+  assert.equal(store.saves, 0, 'never written over');
+  assert.match(gladys.fake.connectionStatus.message.en, /cannot be read/);
+  store.unreadable = false;
+  const answer = await gladys.fake.action('test_connection');
+  assert.match(answer.data.message.en, /The module answers/);
+  assert.equal(store.data.pin, OTHER_PIN, 'pinned again from scratch, at the user’s request');
+  app.stop();
+});
+
+test('r1-10: "Test the connection" subscribes the module again, even within 10 min', async () => {
+  const env = await setup();
+  const { gladys, app, module } = env;
+  assert.equal(module.subscriptions.length, 1);
+  await env.advance(120_000);
+  await gladys.fake.action('test_connection');
+  assert.equal(module.subscriptions.length, 2);
+  assert.equal(module.subscriptions[1][1], true);
   app.stop();
 });

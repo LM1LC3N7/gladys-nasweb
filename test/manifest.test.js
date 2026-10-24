@@ -143,3 +143,20 @@ test('the actions are the ones the code handles; nothing else declared', () => {
     assert.equal(manifest[key], undefined, key);
   }
 });
+
+test('the image ships the license and the third-party notices', () => {
+  const dockerfile = read('Dockerfile');
+  const copies = dockerfile
+    .split('\n')
+    .filter((line) => line.startsWith('COPY '))
+    .join(' ');
+  for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'gladys-assistant-integration.json']) {
+    assert.match(copies, new RegExp(`\\b${file.replace('.', '\\.')}\\b`), file);
+    assert.ok(read(file).length > 100, file);
+  }
+  assert.ok(
+    !read('.dockerignore')
+      .split('\n')
+      .some((l) => /^(LICENSE|THIRD_PARTY)/.test(l.trim())),
+  );
+});

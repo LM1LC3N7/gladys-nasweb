@@ -30,22 +30,35 @@ Le module **pousse** ses états : il les envoie à une adresse qu’on lui a
 donnée (un « abonnement aux états »). Le conteneur de l’intégration ne peut
 rien recevoir du réseau : Gladys lance donc à côté un petit **récepteur**
 (le conteneur `nasweb-push`, même image) et lui publie un port, choisi par
-Gladys et affiché dans l’écran de configuration. L’intégration abonne
-elle-même le module à `http://<adresse de Gladys>:<ce port>/nasweb/<secret>` :
+Gladys. Le récepteur démarre, et son port n’existe, qu’une fois
+enregistrés l’adresse du module, l’identifiant et le mot de passe : avant,
+l’écran de configuration affiche `{{port:nasweb_push}}` tel quel ;
+enregistrez d’abord, puis rechargez l’écran. L’intégration abonne elle-même
+le module à `http://<adresse de Gladys>:<ce port>/nasweb/<secret>` :
 
 - la partie secrète est aléatoire, générée une fois pour votre installation,
   gardée dans la configuration de Gladys (jamais affichée), et jamais écrite
-  dans les journaux ;
-- le récepteur n’accepte que cette adresse, la méthode POST, 32 Ko au plus
-  et 120 envois par minute au plus ; tout le reste est refusé ;
-- l’intégration n’accepte ensuite un état que s’il vient **de l’adresse du
-  module** (option « Vérifier l’expéditeur des états ») et porte **son
-  numéro de série**.
+  dans les journaux. Elle circule **en clair** (HTTP, le module n’envoie pas
+  autrement) à chaque envoi : qui peut voir ce trafic sur votre réseau
+  (Wi-Fi ouvert, port miroir, usurpation ARP) peut la lire et envoyer ;
+- le récepteur n’accepte que cette adresse et la méthode POST, 32 Ko au
+  plus, 60 envois par minute par expéditeur et 240 en tout, 32 connexions au
+  plus (4 par expéditeur) ; une connexion qui n’envoie rien est fermée en 10 s au plus (5 s environ), et une
+  requête doit arriver entière en 11 s environ ; tout le reste est refusé ;
+- avec **Vérifier l’expéditeur des états** (activé par défaut), seule
+  l’adresse du module peut envoyer : le récepteur refuse les autres avant
+  tout, et l’intégration vérifie de nouveau ;
+- l’intégration n’accepte ensuite un état que s’il porte le **numéro de
+  série** du module. Ce numéro n’est pas un secret (il figure dans l’état et
+  dans le paramètre NASWEB_SERIAL) : il distingue un autre module, pas un
+  attaquant.
 
 Si Docker masque la vraie adresse de l’expéditeur sur votre machine (tous
 les états semblent alors venir d’une adresse du type 172.x.x.1, et l’état
-le dit), désactivez « Vérifier l’expéditeur des états » : l’adresse secrète
-et le numéro de série restent vérifiés.
+le dit), vous pouvez désactiver « Vérifier l’expéditeur des états ». Sachez
+ce que cela laisse passer : quiconque a lu l’adresse secrète peut alors
+envoyer de faux états (relais, entrées, température), et donc lancer vos
+scènes.
 
 Il n’y a pas d’autre moyen de lire les états : si aucun état n’arrive
 pendant 90 secondes, les appareils sont affichés **injoignables**, le module
@@ -97,18 +110,32 @@ quand :
 - « Autoriser les commandes » est désactivé, ou la sortie n’est pas
   déclarée sûre ;
 - la valeur n’est pas exactement marche (1) ou arrêt (0) ;
-- aucun état n’est arrivé du module depuis 90 secondes (le résultat ne
-  pourrait pas être confirmé) ;
+- le module n’a jamais été identifié, ou ne signale plus cette sortie ;
+- le dernier état du module a été envoyé il y a plus de 90 secondes (le
+  résultat ne pourrait pas être confirmé) ;
 - le module a refusé l’identifiant, son certificat a changé, ou un autre
   numéro de série répond à son adresse ;
-- une commande pour la même sortie est encore en cours ;
+- l’état enregistré de l’intégration (`/data`) est illisible ;
+- le module ne répond pas, ou répond par une erreur, pendant la relecture de
+  son identité ;
+- la configuration a changé pendant la commande ;
 - le module répond trop lentement : la relecture de l’identité et la
-  commande doivent partir dans les 3,5 secondes après le clic.
+  commande doivent partir dans les 3,5 secondes après le clic (une commande
+  sur la même sortie attend d’abord l’écriture de la précédente).
 
 Avant chaque commande, l’intégration relit l’identité du module (son numéro
-de série). La commande n’est confirmée que par un état du module montrant
-l’état demandé dans les 4 secondes environ ; sinon Gladys affiche
-« Envoyée, sans confirmation ».
+de série). Une fois la commande partie, la réponse est l’une de :
+
+- succès : un état envoyé après l’écriture montre l’état demandé, dans les
+  4 secondes environ après le clic ;
+- « Envoyée, sans confirmation » : pas d’état de ce genre à temps, pas de
+  réponse du module, une réponse d’erreur (code HTTP) ou illisible ;
+- « le module a répondu que la commande a échoué » (sa réponse n’est pas
+  « OK ») ;
+- « le module a refusé la commande (identifiant refusé) » : l’intégration
+  s’arrête alors, comme pour un identifiant refusé ;
+- « remplacée par une commande plus récente » : une autre commande sur la
+  même sortie est partie avant que celle-ci soit confirmée.
 
 ## Sécurité
 

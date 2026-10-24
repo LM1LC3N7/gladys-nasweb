@@ -97,7 +97,10 @@ export class NaswebApp {
     this.tickTimer = undefined;
     this.reading = undefined;
     this.waiters = new Set();
-    this.inFlight = new Set();
+    /** index -> the write of the latest command on that output (the next one waits for it only) */
+    this.writes = new Map();
+    this.lastRefusedStatus = -Infinity;
+    this.unreadable = false;
     this.warned = new Set();
     this.lastTest = -Infinity;
     this.pendingTrust = undefined;
@@ -122,6 +125,8 @@ export class NaswebApp {
     this.temperature = undefined;
     this.seenTemperature = false;
     this.lastPush = undefined;
+    /** The receiver time (`at`, wall clock) of the last push applied. */
+    this.lastPushAt = undefined;
     this.lastError = undefined;
     this.subscribeRefused = false;
     this.refusedPushes = { source: 0, serial: 0, from: '', at: -Infinity };
@@ -131,13 +136,28 @@ export class NaswebApp {
 
   async loadMemory() {
     if (!this.memory) {
-      this.memory = normalizeMemory(await this.store.load().catch(() => null), this.now());
+      let raw = null;
+      try {
+        raw = await this.store.load();
+      } catch (err) {
+        // A file that exists but cannot be read is not "nothing known": the pin and
+        // a login stop may be in it. Nothing is sent until the user tests the connection.
+        this.unreadable = true;
+        this.logger.error(
+          `/data/nasweb.json cannot be read (${err?.code ?? 'invalid'}): nothing is sent to the module`,
+        );
+      }
+      this.memory = normalizeMemory(raw, this.now());
     }
     return this.memory;
   }
 
   /** Resolves true once written. */
   async saveMemory() {
+    if (this.unreadable) {
+      // Never written over a file that could not be read.
+      return false;
+    }
     try {
       await this.store.save(serializeMemory(this.memory));
       return true;
@@ -211,6 +231,10 @@ export class NaswebApp {
         await this.rebuild();
       } else {
         await this.updateStatus();
+      }
+      if (before.checkPushSource !== next.checkPushSource && !next.problem) {
+        // The receiver filters the sender itself: started again with the new setting.
+        await this.ensureReceiver();
       }
       if (before.gladysHost !== next.gladysHost && next.gladysHost) {
         // A new push address: the module is told now (a real change, not a re-read).
@@ -335,8 +359,8 @@ export class NaswebApp {
 
   // --- Background round ----------------------------------------------------------
 
-  pushFresh() {
-    return this.lastPush !== undefined && this.clock() - this.lastPush < TIMINGS.pushFresh;
+  pushFresh(mono = this.clock()) {
+    return this.lastPush !== undefined && mono - this.lastPush < TIMINGS.pushFresh;
   }
 
   trusted() {
@@ -362,7 +386,12 @@ export class NaswebApp {
 
   /** Read while no push arrives (identity, subscription), at most once per interval. */
   needsRead() {
-    if (this.config.problem || this.memory.auth.blocked || this.memory.otherSerial) {
+    if (
+      this.config.problem ||
+      this.unreadable ||
+      this.memory.auth.blocked ||
+      this.memory.otherSerial
+    ) {
       // Another module answers: the login is not sent to it again unless the user asks.
       return false;
     }
@@ -380,6 +409,10 @@ export class NaswebApp {
       CHANNEL_TOKEN: this.tokens.channel,
       HTTP_PORT: String(RECEIVER.httpPort),
       CHANNEL_PORT: String(RECEIVER.channelPort),
+      // The receiver refuses other senders before spending its budget on them.
+      ...(this.config.checkPushSource && this.config.host
+        ? { DEVICE_ADDRESS: this.config.host }
+        : {}),
     };
   }
 
@@ -423,7 +456,10 @@ export class NaswebApp {
     channel.on('up', () => this.logger.info('Connected to the push receiver'));
     channel.on('down', () => this.logger.warn('Lost the push receiver, reconnecting'));
     channel.on('message', (message) => {
-      if (generation === this.generation && message?.type === 'push') {
+      if (
+        generation === this.generation &&
+        (message?.type === 'push' || message?.type === 'refused')
+      ) {
         this.onPush(message);
       }
     });
@@ -432,31 +468,61 @@ export class NaswebApp {
 
   // --- Pushes -----------------------------------------------------------------------
 
+  /** A refused push or notice: counted, the status updated at most every 10 s. */
+  noteRefused(kind, from, mono) {
+    this.refusedPushes = {
+      ...this.refusedPushes,
+      [kind]: this.refusedPushes[kind] + 1,
+      ...(kind === 'source' ? { from } : {}),
+      at: mono,
+    };
+    const wait = this.lastRefusedStatus + TIMINGS.refusedStatusEvery - mono;
+    if (wait <= 0) {
+      this.lastRefusedStatus = mono;
+      this.updateStatus().catch(() => {});
+    } else if (!this.timersById.refusedStatus) {
+      this.later('refusedStatus', wait, () => {
+        this.lastRefusedStatus = this.clock();
+        return this.updateStatus();
+      });
+    }
+  }
+
   onPush(message) {
     const { from, at, body } = message;
-    if (typeof body !== 'string' || typeof from !== 'string' || typeof at !== 'string') {
+    if (typeof from !== 'string' || typeof at !== 'string') {
       return;
     }
+    // One reading of each clock for the whole decision.
+    const now = this.now();
+    const mono = this.clock();
     const sent = Date.parse(at);
-    if (!Number.isFinite(sent) || this.now() - sent > TIMINGS.pushFresh) {
+    if (!Number.isFinite(sent)) {
+      return;
+    }
+    // Dated by the receiver when the module posted it, not when it reached this container.
+    const ageMs = Math.max(0, now - sent);
+    if (ageMs >= TIMINGS.pushFresh) {
       // Kept by the receiver while this container was away: no longer the state.
       return;
     }
-    if (!this.memory?.serial || !this.trusted() || this.config.problem) {
+    if (!this.memory?.serial || !this.trusted() || this.config.problem || this.unreadable) {
+      return;
+    }
+    if (message.type === 'refused') {
+      // The receiver refused a post from another address than the module's.
+      this.noteRefused('source', from, mono);
+      return;
+    }
+    if (typeof body !== 'string') {
       return;
     }
     if (this.config.checkPushSource && from !== this.config.host) {
-      this.refusedPushes = {
-        ...this.refusedPushes,
-        source: this.refusedPushes.source + 1,
-        from,
-        at: this.clock(),
-      };
       this.warnOnce(
         `source:${from}`,
         `A status from ${from || 'an unknown address'} was refused (not the module)`,
       );
-      this.updateStatus().catch(() => {});
+      this.noteRefused('source', from, mono);
       return;
     }
     const parsed = parsePush(body);
@@ -465,13 +531,12 @@ export class NaswebApp {
       return;
     }
     if (parsed.serial !== this.memory.serial) {
-      this.refusedPushes = {
-        ...this.refusedPushes,
-        serial: this.refusedPushes.serial + 1,
-        at: this.clock(),
-      };
       this.warnOnce(`serial:${parsed.serial}`, 'A status with another serial number was refused');
-      this.updateStatus().catch(() => {});
+      this.noteRefused('serial', from, mono);
+      return;
+    }
+    if (this.lastPushAt !== undefined && sent < this.lastPushAt) {
+      // Older than the status already applied: never written over it.
       return;
     }
     if (parsed.dropped > 0) {
@@ -480,8 +545,9 @@ export class NaswebApp {
         `${parsed.dropped} output(s) or input(s) ignored (invalid, duplicated or too many)`,
       );
     }
-    const wasFresh = this.pushFresh();
-    this.lastPush = this.clock();
+    const wasFresh = this.pushFresh(mono);
+    this.lastPushAt = sent;
+    this.lastPush = Math.max(this.lastPush ?? -Infinity, mono - ageMs);
     let grew = false;
     for (const [list, map] of [
       [parsed.outputs, this.outputs],
@@ -500,18 +566,36 @@ export class NaswebApp {
       }
     }
     for (const waiter of [...this.waiters]) {
-      if (parsed.outputs?.get(waiter.index) === waiter.wanted && this.lastPush >= waiter.after) {
+      // Only a status posted after the bytes of the command left confirms it.
+      if (
+        waiter.sentAt !== undefined &&
+        sent >= waiter.sentAt &&
+        parsed.outputs?.get(waiter.index) === waiter.wanted
+      ) {
         this.settleWaiter(waiter, true);
       }
     }
     if (grew) {
       this.later('rebuild', TIMINGS.rebuildDebounce, () => this.rebuild());
     }
-    this.recordAll();
+    this.recordAll(mono);
+    // At the exact end of the freshness: badges, status, and nothing old left to send.
+    this.later('stale', Math.max(0, this.lastPush + TIMINGS.pushFresh - mono), () =>
+      this.onStale(),
+    );
     if (!wasFresh) {
       this.publishAllTransports().catch(() => {});
       this.updateStatus().catch(() => {});
     }
+  }
+
+  async onStale() {
+    if (this.pushFresh()) {
+      return;
+    }
+    this.publisher.clear();
+    await this.publishAllTransports();
+    await this.updateStatus();
   }
 
   /** The value of a feature from what the module reported. */
@@ -521,7 +605,11 @@ export class NaswebApp {
     return entry.spec.read(this.temperature);
   }
 
-  recordAll() {
+  /** Sends the values of the last push, only while it is recent (never an old value as new). */
+  recordAll(mono = this.clock()) {
+    if (!this.pushFresh(mono)) {
+      return;
+    }
     for (const [featureId, entry] of this.model.features) {
       const value = this.valueOf(entry);
       if (typeof value === 'number' && Number.isFinite(value)) {
@@ -608,16 +696,17 @@ export class NaswebApp {
    */
   async doRead({ force = false, test = false } = {}) {
     const generation = this.generation;
-    if (this.config.problem || (this.memory.auth.blocked && !test)) {
+    if (this.config.problem || this.unreadable || (this.memory.auth.blocked && !test)) {
       return { error: this.memory.auth.blocked ? ERROR_KINDS.AUTH : 'problem' };
     }
-    if (!force && this.now() - this.memory.lastTry < TIMINGS.checkInterval) {
+    const now = this.now();
+    if (!force && now - this.memory.lastTry < TIMINGS.checkInterval) {
       return { error: 'notDue' };
     }
     // The time of the attempt goes to /data BEFORE the read (once a minute at most).
     const previous = this.memory.lastTry;
-    this.memory.lastTry = this.now();
-    if (this.memory.lastTry - previous >= TIMINGS.checkInterval) {
+    this.memory.lastTry = now;
+    if (now - previous >= TIMINGS.checkInterval) {
       await this.saveMemory();
     }
     let info;
@@ -640,7 +729,7 @@ export class NaswebApp {
     }
     this.lastError = undefined;
     await this.saveMemory();
-    await this.subscribe(generation);
+    await this.subscribe(generation, { force: test });
     if (generation !== this.generation) {
       return { error: ERROR_KINDS.STALE };
     }
@@ -723,13 +812,14 @@ export class NaswebApp {
   }
 
   /** Subscribes the module to the push URL when it changed, or renews it while nothing arrives. */
-  async subscribe(generation) {
+  async subscribe(generation, { force = false } = {}) {
     const wanted = this.pushTarget();
     if (!wanted) {
       return;
     }
     const current = this.subscriptionCurrent();
     if (
+      !force &&
       current &&
       (this.pushFresh() || this.now() - this.memory.subscribedAt < TIMINGS.resubscribe)
     ) {
@@ -848,8 +938,9 @@ export class NaswebApp {
   async deviceCreated(device) {
     this.refreshCreated();
     this.transports.delete(device?.external_id);
+    const fresh = this.pushFresh();
     for (const f of device?.features ?? []) {
-      const value = this.lastValues.get(f.external_id);
+      const value = fresh ? this.lastValues.get(f.external_id) : undefined;
       if (value) {
         this.publisher.push(f.external_id, value);
       }
@@ -909,6 +1000,7 @@ export class NaswebApp {
     const m = this.memory ?? emptyMemory();
     const c = this.config;
     if (c.problem) return [false, T.problem(c.problem)];
+    if (this.unreadable) return [false, T.unreadable];
     if (m.auth.blocked) return [false, T.refused];
     if (m.refusedPin) return [false, T.certificate(m.refusedPin)];
     if (m.otherSerial) return [false, T.otherDevice(m.otherSerial, m.serial)];
@@ -963,17 +1055,29 @@ export class NaswebApp {
     return new Error(word(text, this.config.language));
   }
 
-  waitFor(index, wanted, deadline) {
+  waitFor(index, wanted, deadline, mono) {
     let waiter;
     const promise = new Promise((resolve) => {
-      waiter = { index, wanted, after: this.clock(), resolve };
+      waiter = { index, wanted, sentAt: undefined, resolve };
       waiter.timer = this.timers.setTimeout(
         () => this.settleWaiter(waiter, false),
-        Math.max(0, deadline - this.clock()),
+        Math.max(0, deadline - mono),
       );
     });
     this.waiters.add(waiter);
-    return { promise, cancel: () => this.settleWaiter(waiter, false) };
+    return {
+      promise,
+      cancel: () => this.settleWaiter(waiter, false),
+      /** The bytes leave now: only a status posted from now confirms; older commands are replaced. */
+      sent: () => {
+        waiter.sentAt = this.now();
+        for (const other of [...this.waiters]) {
+          if (other !== waiter && other.index === index) {
+            this.settleWaiter(other, 'replaced');
+          }
+        }
+      },
+    };
   }
 
   settleWaiter(waiter, result) {
@@ -1009,20 +1113,30 @@ export class NaswebApp {
       throw this.refusal(ERRORS.badValue);
     }
     this.checkCommand(index);
-    if (!this.pushFresh()) {
+    if (!this.pushFresh(received)) {
       throw this.refusal(ERRORS.noFreshState);
     }
     if (!this.outputs.has(index)) {
       throw this.refusal(ERRORS.unknownOutput);
     }
-    if (this.inFlight.has(index)) {
-      throw this.refusal(ERRORS.stillRunning);
-    }
-    this.inFlight.add(index);
+    // One write at a time per output: a newer command waits for the WRITE of the
+    // previous one only (not for its confirmation), then replaces it.
+    const prior = this.writes.get(index);
+    let release;
+    const mine = new Promise((resolve) => {
+      release = resolve;
+    });
+    this.writes.set(index, mine);
     try {
-      await this.command(index, wanted === 1, received);
+      if (prior) {
+        await prior;
+      }
+      await this.command(index, wanted === 1, received, release);
     } finally {
-      this.inFlight.delete(index);
+      release();
+      if (this.writes.get(index) === mine) {
+        this.writes.delete(index);
+      }
     }
   }
 
@@ -1030,6 +1144,9 @@ export class NaswebApp {
   checkCommand(index) {
     if (this.config.problem || !this.started) {
       throw this.refusal(ERRORS.notConfigured);
+    }
+    if (this.unreadable) {
+      throw this.refusal(ERRORS.unreadable);
     }
     if (!this.config.allowCommands) {
       throw this.refusal(ERRORS.commandsDisabled);
@@ -1048,7 +1165,7 @@ export class NaswebApp {
     }
   }
 
-  /** The refusal of a request that did not leave, or that the module refused. */
+  /** The refusal of a request that did not leave. */
   async refusalOf(err, generation) {
     if (err?.kind === ERROR_KINDS.REFUSED && err.cause instanceof Error) {
       return err.cause;
@@ -1068,31 +1185,48 @@ export class NaswebApp {
       case ERROR_KINDS.LATE:
         return this.refusal(ERRORS.tooSlow);
       case ERROR_KINDS.STALE:
-        return this.refusal(ERRORS.notConfigured);
+        return this.refusal(ERRORS.configChanged);
       default:
         return this.refusal(ERRORS.unreachable(err?.kind));
     }
   }
 
-  async command(index, state, received) {
+  /** The answer to a write that may have reached the module. */
+  async afterSent(err, generation, index) {
+    if (err?.kind === ERROR_KINDS.AUTH) {
+      if (generation === this.generation) {
+        await this.failed(err);
+      }
+      return this.refusal(ERRORS.loginRefusedSent);
+    }
+    this.logger.warn(`NASweb output ${index}: ${err?.message ?? 'no answer'}`);
+    if (err?.kind === ERROR_KINDS.HTTP) {
+      return this.refusal(ERRORS.errorAnswer(err.status));
+    }
+    if (err?.kind === ERROR_KINDS.PROTOCOL) {
+      return this.refusal(ERRORS.unreadableAnswer);
+    }
+    return this.refusal(ERRORS.noAnswer);
+  }
+
+  async command(index, state, received, written = () => {}) {
     const generation = this.generation;
     const sendBy = received + TIMINGS.commandSendBy;
     const answerBy = received + TIMINGS.commandAnswerBy;
-    const readBy = Math.min(this.clock() + TIMINGS.commandReadMax, sendBy - TIMINGS.commandMinSend);
-    if (readBy - this.clock() < TIMINGS.commandMinRead) {
+    const start = this.clock();
+    const readBy = Math.min(start + TIMINGS.commandReadMax, sendBy - TIMINGS.commandMinSend);
+    if (readBy - start < TIMINGS.commandMinRead) {
       throw this.refusal(ERRORS.tooSlow);
     }
     // The identity of the module now (never the one in memory): nothing is written by this read.
     let info;
     try {
-      info = await this.client.deviceInfo(
-        this.options(generation, { timeoutMs: readBy - this.clock() }),
-      );
+      info = await this.client.deviceInfo(this.options(generation, { timeoutMs: readBy - start }));
     } catch (err) {
       throw await this.refusalOf(err, generation);
     }
     if (generation !== this.generation) {
-      throw this.refusal(ERRORS.notConfigured);
+      throw this.refusal(ERRORS.configChanged);
     }
     if (info.serial !== this.memory.serial) {
       this.identify(info);
@@ -1100,44 +1234,54 @@ export class NaswebApp {
       await this.updateStatus();
       throw this.refusal(ERRORS.untrusted);
     }
-    const check = () => {
+    const check = (mono) => {
       if (generation !== this.generation) {
-        throw this.refusal(ERRORS.notConfigured);
+        throw this.refusal(ERRORS.configChanged);
       }
       this.checkCommand(index);
-      if (this.clock() > sendBy) {
+      if (mono > sendBy) {
         throw this.refusal(ERRORS.tooSlow);
       }
     };
-    check();
+    const before = this.clock();
+    check(before);
     // The confirmation is awaited from before the write (a fast module).
-    const confirmation = this.waitFor(index, state, answerBy);
+    const confirmation = this.waitFor(index, state, answerBy, before);
     let ok;
     try {
       ok = await this.client.setOutput(
         this.options(generation, {
-          timeoutMs: Math.max(1, answerBy - this.clock()),
+          timeoutMs: Math.max(1, answerBy - before),
           // beforeSend: the very last check, right before the bytes leave.
-          beforeSend: check,
+          beforeSend: () => {
+            check(this.clock());
+            confirmation.sent();
+          },
         }),
         index,
         state,
       );
     } catch (err) {
       confirmation.cancel();
-      if (notSent(err) || err?.kind === ERROR_KINDS.AUTH) {
+      written();
+      if (notSent(err)) {
         throw await this.refusalOf(err, generation);
       }
       // The request may have reached the module: never "not sent".
-      this.logger.warn(`NASweb output ${index}: ${err?.message ?? 'no answer'}`);
-      throw this.refusal(ERRORS.sentUnconfirmed);
+      throw await this.afterSent(err, generation, index);
     }
+    // The next command on this output may leave now: it does not wait for this confirmation.
+    written();
     this.logger.info(`NASweb output ${index}: ${state ? 'on' : 'off'} sent`);
     if (!ok) {
       confirmation.cancel();
       throw this.refusal(ERRORS.rejected);
     }
-    if (!(await confirmation.promise)) {
+    const result = await confirmation.promise;
+    if (result === 'replaced') {
+      throw this.refusal(ERRORS.replaced);
+    }
+    if (!result) {
       throw this.refusal(ERRORS.sentUnconfirmed);
     }
   }
@@ -1157,6 +1301,18 @@ export class NaswebApp {
     const next = normalizeConfig(raw);
     if (next.problem) {
       return T.problem(next.problem);
+    }
+    if (this.unreadable) {
+      // The user's gesture: start again from scratch (the certificate is pinned again).
+      this.unreadable = false;
+      this.memory = { ...emptyMemory(), target: targetOf(next) };
+      this.logger.warn(
+        "NASweb: /data could not be read; starting again from scratch at the user's request",
+      );
+      if (!(await this.saveMemory())) {
+        this.unreadable = true;
+        return T.unreadable;
+      }
     }
     if (!this.started || connectionKey(next) !== this.connKey) {
       await this.start(raw);

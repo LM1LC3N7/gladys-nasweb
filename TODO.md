@@ -52,8 +52,12 @@ local TLS server and the real receiver on the loopback.
   case and returns `GLADYS_*` ones unchanged, as reserved; seen in the
   sandbox, see gladys-mystrom).
 - **Checks on a push**: receiver: method POST, exact path, token compared in
-  constant time, 32 KB, 10 s, 120 a minute, 5 kept while the main container
-  is away; main container: source address equal to the module's (option
+  constant time, 32 KB, 5 kept while the main container
+  is away (review r1: 32 connections, 4 per sender, idle closed within 10 s from the
+  acceptance, headers 5 s, request 10 s checked every second, 60 posts a
+  minute per sender, 240 in all; with the option on, other senders get 403
+  from the receiver before any budget); main container: source address
+  equal to the module's (option
   `check_push_source`, on by default, for Docker setups hiding the source:
   docker-proxy, rootless), serial number equal to the identified one, a push
   older than 90 s ignored, strict parsing (own keys, indexes 0..999, 64
@@ -96,3 +100,18 @@ local TLS server and the real receiver on the loopback.
   humidity (the API gives none), several modules.
 - **Temperature**: `device_temp_env` in °C as webio-api reads it, sent at
   most every 30 s; the feature appears once a value was seen.
+- **Review r1** (fixes):
+  - freshness and confirmation dated by the time the receiver got the post
+    (`at`), never by its arrival in this container: a push kept by the
+    receiver counts from its own time; an older push never overwrites a newer
+    one; only a push posted after the bytes of `setOutput` left (time noted in
+    `beforeSend`) confirms a command; a timer at the exact end of the 90 s
+    turns the badges unreachable and drops the pending values;
+  - values sent to Gladys only while the last push is under 90 s old (rebuild,
+    reads, deviceCreated included): never an old value as new;
+  - one write at a time per output: a newer command waits for the write of
+    the previous one only, then replaces it ("replaced by a newer command");
+  - `/data/nasweb.json` that exists but cannot be read: nothing sent, never
+    written over, until "Test the connection" starts again from scratch;
+  - "Test the connection" subscribes again at once;
+  - refused pushes update the status at most every 10 s.

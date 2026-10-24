@@ -101,6 +101,10 @@ export const T = {
       `Another module answers at this address (serial ${serial}, ${known} expected): nothing is sent to it. If you replaced the module, press "Trust the device now answering".`,
       `Un autre module répond à cette adresse (série ${serial}, ${known} attendu) : rien ne lui est envoyé. Si vous avez remplacé le module, utilisez « Faire confiance à l’appareil qui répond ».`,
     ),
+  unreadable: both(
+    'The saved state of the integration (/data/nasweb.json) cannot be read: nothing is sent to the module, so that no unknown certificate is trusted. Press "Test the connection" to start again from scratch (the certificate of the module is then pinned again).',
+    'L’état enregistré de l’intégration (/data/nasweb.json) est illisible : rien n’est envoyé au module, pour ne faire confiance à aucun certificat inconnu. Utilisez « Tester la connexion » pour repartir de zéro (le certificat du module est alors épinglé de nouveau).',
+  ),
   noGladysAddress: both(
     'Type the IP address of the Gladys machine in "Address of Gladys": the module sends its states there, nothing arrives without it.',
     'Saisissez l’adresse IP de la machine Gladys dans « Adresse de Gladys » : le module y envoie ses états, rien n’arrive sans elle.',
@@ -173,10 +177,15 @@ export const TRUST = {
     'Rien à approuver : le module qui répond est celui qui est connu.',
   ),
   confirm: ({ fingerprint, serial }) =>
-    both(
-      `Now answering: ${serial ? `serial ${serial}` : 'the known serial'}${fingerprint ? `, certificate ${fingerprint}` : ''}. Press again within 60 s to trust exactly this.`,
-      `Répond maintenant : ${serial ? `série ${serial}` : 'la série connue'}${fingerprint ? `, certificat ${fingerprint}` : ''}. Appuyez de nouveau dans les 60 s pour approuver exactement cela.`,
-    ),
+    fingerprint && !serial
+      ? both(
+          `Now answering: certificate ${fingerprint}; its serial number was not read (nothing is sent to an unknown certificate). Trusting it sends the login to this device, then its serial number is compared with the known one. Press again within 60 s to trust exactly this certificate.`,
+          `Répond maintenant : certificat ${fingerprint} ; son numéro de série n’a pas été lu (rien n’est envoyé à un certificat inconnu). L’approuver envoie l’identifiant à cet appareil, puis son numéro de série est comparé à celui connu. Appuyez de nouveau dans les 60 s pour approuver exactement ce certificat.`,
+        )
+      : both(
+          `Now answering: serial ${serial}${fingerprint ? `, certificate ${fingerprint}` : ''}. Press again within 60 s to trust exactly this.`,
+          `Répond maintenant : série ${serial}${fingerprint ? `, certificat ${fingerprint}` : ''}. Appuyez de nouveau dans les 60 s pour approuver exactement cela.`,
+        ),
   done: both('Trusted. The module is read again now.', 'Approuvé. Le module est relu maintenant.'),
 };
 
@@ -216,10 +225,6 @@ export const ERRORS = {
     'The module no longer reports this output: nothing sent.',
     'Le module ne signale plus cette sortie : rien n’a été envoyé.',
   ),
-  stillRunning: both(
-    'A command for this output is still running: nothing sent.',
-    'Une commande pour cette sortie est encore en cours : rien n’a été envoyé.',
-  ),
   tooSlow: both(
     'The module answered too slowly to send the command in time: nothing sent.',
     'Le module a répondu trop lentement pour envoyer la commande à temps : rien n’a été envoyé.',
@@ -229,6 +234,35 @@ export const ERRORS = {
   rejected: both(
     'The module answered that the command failed.',
     'Le module a répondu que la commande a échoué.',
+  ),
+  configChanged: both(
+    'The configuration changed meanwhile: nothing sent.',
+    'La configuration a changé entre-temps : rien n’a été envoyé.',
+  ),
+  unreadable: both(
+    'The saved state of the integration cannot be read: nothing sent.',
+    'L’état enregistré de l’intégration est illisible : rien n’a été envoyé.',
+  ),
+  loginRefusedSent: both(
+    'The module refused the command (login refused).',
+    'Le module a refusé la commande (identifiant refusé).',
+  ),
+  errorAnswer: (status) =>
+    both(
+      `The module answered with an error (HTTP ${status}): sent, without confirmation.`,
+      `Le module a répondu par une erreur (HTTP ${status}) : envoyée, sans confirmation.`,
+    ),
+  unreadableAnswer: both(
+    'The answer of the module cannot be read: sent, without confirmation.',
+    'La réponse du module est illisible : envoyée, sans confirmation.',
+  ),
+  noAnswer: both(
+    'Sent, without confirmation: the module did not answer in time.',
+    'Envoyée, sans confirmation : le module n’a pas répondu à temps.',
+  ),
+  replaced: both(
+    'Sent, then replaced by a newer command on this output: without confirmation.',
+    'Envoyée, puis remplacée par une commande plus récente sur cette sortie : sans confirmation.',
   ),
   sentUnconfirmed: both(
     'Sent, without confirmation: the new state did not arrive in time.',

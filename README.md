@@ -34,7 +34,7 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (NaswebApp)
   published port (Gladys spec, container descriptor). A sub-container of the
   same image (`node src/receiver.js`, manifest `containers`, `start: manual`)
   serves exactly `POST /nasweb/<push token>` on a port Gladys publishes,
-  bounded (32 KB, 10 s, 120 a minute), and hands each push to the main
+  bounded (32 KB, 32 connections, 4 per sender, idle closed within 10 s, about 11 s per request, 60 posts a minute per sender, 240 in all), and hands each push to the main
   container over a private TCP channel authenticated both ways by an HMAC
   challenge-response (from LM1LC3N7/gladys-mystrom). The main container
   checks the source address (the module's, option `check_push_source`), the
